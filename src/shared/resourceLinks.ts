@@ -59,9 +59,10 @@ function cleanupExpiredResources(): void {
   }
 }
 
-// Run cleanup every 10 minutes (skip in test environment)
+// Run cleanup every 10 minutes (skip in test environment).
+// .unref() ensures this timer doesn't prevent the process from exiting cleanly.
 if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
-  setInterval(cleanupExpiredResources, 10 * 60 * 1000);
+  setInterval(cleanupExpiredResources, 10 * 60 * 1000).unref();
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────

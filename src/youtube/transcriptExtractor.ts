@@ -106,27 +106,35 @@ export interface Logger {
  * Simple console logger implementation
  */
 export class ConsoleLogger implements Logger {
+  /**
+   * Write to stderr only — stdout is the STDIO JSON-RPC channel and
+   * any stray output there corrupts the protocol and disconnects clients.
+   */
+  private write(line: string): void {
+    process.stderr.write(line + '\n');
+  }
+
   debug(message: string, meta?: Record<string, unknown>): void {
     if (process.env.YOUTUBE_TRANSCRIPT_DEBUG === 'true') {
-      console.debug(`[YouTube Transcript Debug] ${message}`, meta || '');
+      this.write(`[YouTube Transcript Debug] ${message} ${meta ? JSON.stringify(meta) : ''}`);
     }
   }
 
   info(message: string, meta?: Record<string, unknown>): void {
     if (process.env.YOUTUBE_TRANSCRIPT_VERBOSE === 'true') {
-      console.log(`[YouTube Transcript Info] ${message}`, meta ? JSON.stringify(meta) : '');
+      this.write(`[YouTube Transcript Info] ${message} ${meta ? JSON.stringify(meta) : ''}`);
     }
   }
 
   warn(message: string, meta?: Record<string, unknown>): void {
     if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
-      console.warn(`[YouTube Transcript Warning] ${message}`, meta ? JSON.stringify(meta) : '');
+      this.write(`[YouTube Transcript Warning] ${message} ${meta ? JSON.stringify(meta) : ''}`);
     }
   }
 
   error(message: string, meta?: Record<string, unknown>): void {
     if (process.env.NODE_ENV !== 'test') {
-      console.error(`[YouTube Transcript Error] ${message}`, meta ? JSON.stringify(meta) : '');
+      this.write(`[YouTube Transcript Error] ${message} ${meta ? JSON.stringify(meta) : ''}`);
     }
   }
 }

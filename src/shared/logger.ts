@@ -52,6 +52,15 @@ class Logger {
 
   // ── internals ───────────────────────────────────────────────
 
+  /**
+   * Write a line to stderr. In STDIO MCP mode stdout is the JSON-RPC
+   * channel, so ALL log output MUST go to stderr to avoid corrupting
+   * the protocol and causing client disconnects.
+   */
+  private write(line: string): void {
+    process.stderr.write(line + '\n');
+  }
+
   private log(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
     // In test environment, only emit errors
     if (this.env === 'test' && level !== 'error') return;
@@ -65,14 +74,12 @@ class Logger {
 
     if (this.env === 'production') {
       // JSON output — one line per entry
-      const writer = LEVEL_ORDER[level] >= LEVEL_ORDER.warn ? console.error : console.log;
-      writer(JSON.stringify(entry));
+      this.write(JSON.stringify(entry));
     } else {
       // Human-readable
       const prefix = `[${entry.timestamp}] [${level.toUpperCase()}]`;
       const metaStr = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
-      const writer = LEVEL_ORDER[level] >= LEVEL_ORDER.warn ? console.error : console.log;
-      writer(`${prefix} ${message}${metaStr}`);
+      this.write(`${prefix} ${message}${metaStr}`);
     }
   }
 }

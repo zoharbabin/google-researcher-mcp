@@ -128,9 +128,10 @@ function cleanupExpiredSessions(): void {
   }
 }
 
-// Run cleanup every 5 minutes (skip in test environment)
+// Run cleanup every 5 minutes (skip in test environment).
+// .unref() ensures this timer doesn't prevent the process from exiting cleanly.
 if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
-  setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
+  setInterval(cleanupExpiredSessions, 5 * 60 * 1000).unref();
 }
 
 // ── Session Management ───────────────────────────────────────────────────────

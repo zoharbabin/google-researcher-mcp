@@ -2666,6 +2666,19 @@ export {
   initializeGlobalInstances
 };
 
+// --- Global Error Handlers ---
+// Catch unhandled errors and route them to stderr so they never corrupt
+// the STDIO JSON-RPC channel on stdout. Without these, Node.js default
+// behaviour prints to stdout/stderr unpredictably and can crash the process.
+process.on('uncaughtException', (error) => {
+  process.stderr.write(`[FATAL] Uncaught exception: ${error?.stack ?? error}\n`);
+  // Don't exit — keep the STDIO transport alive so the client doesn't disconnect.
+});
+
+process.on('unhandledRejection', (reason) => {
+  process.stderr.write(`[ERROR] Unhandled promise rejection: ${reason instanceof Error ? reason.stack : reason}\n`);
+});
+
 // --- Main Execution Block ---
 /**
  * Main execution block: Initializes instances and starts transports/server
@@ -2698,8 +2711,8 @@ export {
 
     const { app } = await createAppAndHttpTransport(globalCacheInstance, eventStoreInstance, oauthOpts);
 
-    // Start the HTTP server
-    app.listen(PORT, "::", () => {
+    // Start the HTTP server with error handling
+    const server = app.listen(PORT, "::", () => {
         logger.info(`SSE server listening on port ${PORT}`, {
           endpoints: [
             `http://[::1]:${PORT}/mcp`,
@@ -2709,5 +2722,18 @@ export {
           ]
         });
       });
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        logger.warn(`Port ${PORT} already in use — HTTP transport disabled, STDIO transport remains active.`);
+      } else {
+        logger.error(`HTTP server error: ${err.message}`, { code: err.code });
+      }
+      // Don't exit — STDIO transport is still functional.
+    });
   }
-})(); // End main execution block
+})().catch((err) => {
+  // Last-resort catch for initialization failures.
+  process.stderr.write(`[FATAL] Server initialization failed: ${err?.stack ?? err}\n`);
+  process.exit(1);
+}); // End main execution block

@@ -212,46 +212,42 @@ describe('YouTubeTranscriptError', () => {
 
 describe('ConsoleLogger', () => {
   let logger: ConsoleLogger;
-  let consoleSpy: any;
+  let stderrSpy: jest.SpyInstance;
 
   beforeEach(() => {
     logger = new ConsoleLogger();
-    consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
 
   afterEach(() => {
-    consoleSpy.mockRestore();
+    stderrSpy.mockRestore();
   });
 
   it('should log info messages', () => {
     // Set environment variable to enable verbose logging for this test
     process.env.YOUTUBE_TRANSCRIPT_VERBOSE = 'true';
     logger.info('test message', { key: 'value' });
-    expect(consoleSpy).toHaveBeenCalledWith('[YouTube Transcript Info] test message', '{"key":"value"}');
+    expect(stderrSpy).toHaveBeenCalledWith('[YouTube Transcript Info] test message {"key":"value"}\n');
     // Clean up
     delete process.env.YOUTUBE_TRANSCRIPT_VERBOSE;
   });
 
   it('should log debug messages when debug mode enabled', () => {
     process.env.YOUTUBE_TRANSCRIPT_DEBUG = 'true';
-    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
-    
+
     logger.debug('test message', { key: 'value' });
-    
-    expect(debugSpy).toHaveBeenCalledWith('[YouTube Transcript Debug] test message', { key: 'value' });
-    
-    debugSpy.mockRestore();
+
+    expect(stderrSpy).toHaveBeenCalledWith('[YouTube Transcript Debug] test message {"key":"value"}\n');
+
     delete process.env.YOUTUBE_TRANSCRIPT_DEBUG;
   });
 
   it('should not log debug messages when debug mode disabled', () => {
-    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
-    
     logger.debug('test message');
-    
-    expect(debugSpy).not.toHaveBeenCalled();
-    
-    debugSpy.mockRestore();
+
+    // stderr.write may be called by other things, so check no YouTube debug line was written
+    const calls = stderrSpy.mock.calls.map((c: any[]) => c[0]);
+    expect(calls.every((c: string) => !c.includes('[YouTube Transcript Debug]'))).toBe(true);
   });
 });
 
