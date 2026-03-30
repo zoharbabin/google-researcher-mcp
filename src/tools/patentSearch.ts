@@ -316,7 +316,7 @@ function parsePatentResult(item: GoogleSearchItem): PatentResultOutput | null {
  * Replicates the same logic as buildPatentSearchUrl but without
  * Google-specific URL construction or site: operator.
  */
-function buildTavilyPatentQuery(params: PatentSearchInput): string {
+export function buildTavilyPatentQuery(params: PatentSearchInput): string {
   const queryParts: string[] = [];
 
   queryParts.push(params.query.trim());
@@ -356,7 +356,7 @@ function buildTavilyPatentQuery(params: PatentSearchInput): string {
 /**
  * Parse a Tavily search result into a PatentResultOutput.
  */
-function parseTavilyPatentResult(item: { title: string; url: string; content: string }): PatentResultOutput | null {
+export function parseTavilyPatentResult(item: { title: string; url: string; content: string }): PatentResultOutput | null {
   const patentNumber = extractPatentNumber(item.url);
   if (!patentNumber) {
     return null;
@@ -503,9 +503,10 @@ async function handleTavilyPatentSearch(
  * Tavily is used when SEARCH_PROVIDER=tavily or when TAVILY_API_KEY is set
  * and Google credentials are absent.
  */
-function useTavilyProvider(): boolean {
+export function useTavilyProvider(): boolean {
   const provider = process.env.SEARCH_PROVIDER?.toLowerCase();
   if (provider === 'tavily') return true;
+  if (provider === 'parallel') return true;
   if (provider === 'google') return false;
   // Fallback: use Tavily only if Google credentials are missing but Tavily key exists
   const hasGoogle = !!(process.env.GOOGLE_CUSTOM_SEARCH_API_KEY && process.env.GOOGLE_CUSTOM_SEARCH_ID);
