@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.1] - 2026-03-30
+
+### Fixed
+- **Timer Leak in withTimeout**: `setTimeout` was never cleared when the wrapped promise resolved first, causing accumulation of orphaned timers over the server lifetime
+- **HTTP Server Not Closed on Shutdown**: The HTTP server variable was scoped locally and unreachable from `gracefulShutdown()`, leaving ports bound and sockets open
+- **Crawler Storage Directory Leak**: Cheerio and Playwright crawlers created unique storage directories per scrape that were never cleaned up, causing unbounded disk growth
+- **Playwright Zombie Browser Processes**: Added `crawler.teardown()` in finally blocks to ensure browser processes are terminated even on timeout
+- **STDIO Protocol Corruption in testCleanup.ts**: Replaced `console.log`/`console.warn` calls with `process.stderr.write()` to prevent stdout pollution in STDIO transport mode
+- **Missing Fetch Timeout in Patent Search**: `fetch()` call in `patentSearch.ts` had no timeout and could hang indefinitely; added `AbortSignal.timeout(30s)`
+- **Unbounded Resource Cache**: `resourceLinks.ts` cache Map had no size limit; added cap at 500 entries with LRU-style eviction (oldest 20%)
+- **Unbounded Sequential Search Sessions**: `sequentialSearch.ts` session Map had no upper bound; added cap at 50 sessions with oldest-eviction
+- **Memory Leak in Base Cache Dispose**: `Cache.dispose()` cleared the interval but not the `cache`, `accessLog`, or `pendingPromises` maps, preventing garbage collection
+- **Orphaned .tmp File Accumulation**: Failed atomic writes left `.tmp` files on disk that were skipped but never deleted during cache load; now cleaned up automatically
+- **persistSync Shutdown Hang**: Synchronous cache persistence on shutdown iterated all entries without limit; capped at 2000 writes to prevent process hang on large caches
+
 ## [Unreleased]
 
 ### Added
