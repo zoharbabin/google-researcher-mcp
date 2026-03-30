@@ -176,6 +176,25 @@ export interface GoogleNewsSearchResponse {
   error?: GoogleApiError;
 }
 
+// ── Normalized Search Result (provider-agnostic) ─────────────────────────────
+
+/**
+ * A provider-agnostic search result that normalizes Google and Tavily responses
+ * so both providers feed the same downstream formatters.
+ */
+export interface NormalizedSearchResult {
+  /** Result title */
+  title: string;
+  /** URL of the result */
+  url: string;
+  /** Snippet or content excerpt */
+  snippet: string;
+  /** Relevance score (0-1, optional — Tavily provides this natively) */
+  score?: number;
+  /** Which provider returned this result */
+  provider: 'google' | 'tavily';
+}
+
 // ── Error Types ──────────────────────────────────────────────────────────────
 
 /**

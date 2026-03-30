@@ -104,6 +104,20 @@ export const ENV_VALIDATION_RULES: EnvValidationRule[] = [
     description: 'Comma-separated list of allowed CORS origins',
     example: 'https://example.com,https://app.example.com',
   },
+  {
+    name: 'TAVILY_API_KEY',
+    required: false,
+    description: 'Tavily API key for web search (enables Tavily provider when set)',
+    example: 'tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+    validate: (value: string) => value.length >= 32,
+  },
+  {
+    name: 'SEARCH_PROVIDER',
+    required: false,
+    description: 'Search provider selection: google (default), tavily, or parallel',
+    example: 'google',
+    validate: (value: string) => ['google', 'tavily', 'parallel'].includes(value),
+  },
 ];
 
 // ── Validation Result Types ────────────────────────────────────────────────

@@ -77,6 +77,7 @@ import {
   type GoogleNewsSearchResponse,
   getErrorMessage,
 } from "./types/googleApi.js";
+import { tavily } from "@tavily/core";
 import {
   sequentialSearchInputSchema,
   sequentialSearchOutputSchema,
@@ -429,6 +430,75 @@ function configureToolsAndResources(
         onStateChange: (from, to) => logger.warn('Web scraping circuit breaker state change', { from, to }),
     });
 
+    // ── Tavily Search Provider ────────────────────────────────────
+    const SEARCH_PROVIDER = (process.env.SEARCH_PROVIDER || 'google') as 'google' | 'tavily' | 'parallel';
+    const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+
+    // Lazily-initialized Tavily client (only created when needed)
+    let tavilyClient: ReturnType<typeof tavily> | undefined;
+    function getTavilyClient() {
+        if (!tavilyClient) {
+            if (!TAVILY_API_KEY) {
+                throw new Error('TAVILY_API_KEY is not set. Cannot use Tavily search provider.');
+            }
+            tavilyClient = tavily({ apiKey: TAVILY_API_KEY });
+        }
+        return tavilyClient;
+    }
+
+    /** Map user-friendly time range names to Tavily timeRange values */
+    const TAVILY_TIME_RANGE_MAP: Record<string, string> = {
+        day: 'day',
+        week: 'week',
+        month: 'month',
+        year: 'year',
+    };
+
+    /**
+     * Performs a Tavily search and returns results in the same TextContent[]
+     * format as googleSearchFn (an array of { type: "text", text: url }).
+     */
+    const tavilySearchFn = async (params: {
+        query: string;
+        num_results: number;
+        time_range?: string;
+        traceId?: string;
+        siteSearch?: string;
+        siteSearchFilter?: 'i' | 'e';
+    }): Promise<TextContent[]> => {
+        const client = getTavilyClient();
+
+        const searchOptions: Record<string, unknown> = {
+            maxResults: params.num_results,
+            searchDepth: 'basic' as const,
+            topic: 'general' as const,
+        };
+
+        if (params.time_range && TAVILY_TIME_RANGE_MAP[params.time_range]) {
+            searchOptions.timeRange = TAVILY_TIME_RANGE_MAP[params.time_range];
+        }
+
+        // Map site filtering to Tavily's domain include/exclude
+        if (params.siteSearch) {
+            if (params.siteSearchFilter === 'e') {
+                searchOptions.excludeDomains = [params.siteSearch];
+            } else {
+                searchOptions.includeDomains = [params.siteSearch];
+            }
+        }
+
+        logger.debug('Tavily search executing', { traceId: params.traceId, query: params.query, options: searchOptions });
+
+        const response = await withTimeout(
+            client.search(params.query, searchOptions),
+            SEARCH_TIMEOUT_MS,
+            'Tavily Search API'
+        );
+
+        const links: string[] = (response.results || []).map((r: { url: string }) => r.url);
+        return links.map((l) => ({ type: "text" as const, text: l }));
+    };
+
     /** Map user-friendly time range names to Google dateRestrict values */
     const TIME_RANGE_MAP: Record<string, string> = {
         day: 'd1',
@@ -553,6 +623,54 @@ function configureToolsAndResources(
                 staleTime: 30 * 60 * 1000 // Allow serving stale content for another 30 minutes while revalidating
             }
         );
+    };
+
+    /**
+     * Provider-aware search function. Delegates to Google, Tavily, or both
+     * based on the SEARCH_PROVIDER env var. Returns the same TextContent[]
+     * format as googleSearchFn for seamless downstream compatibility.
+     */
+    const searchFn = async (params: GoogleSearchParams): Promise<TextContent[]> => {
+        if (SEARCH_PROVIDER === 'tavily') {
+            return tavilySearchFn(params);
+        }
+
+        if (SEARCH_PROVIDER === 'parallel') {
+            // Run both providers concurrently, merge and deduplicate by URL
+            const [googleResults, tavilyResults] = await Promise.allSettled([
+                googleSearchFn(params),
+                tavilySearchFn(params),
+            ]);
+
+            const urlSet = new Set<string>();
+            const merged: TextContent[] = [];
+
+            // Google results first (primary), then Tavily additions
+            for (const settled of [googleResults, tavilyResults]) {
+                if (settled.status === 'fulfilled') {
+                    for (const item of settled.value) {
+                        if (!urlSet.has(item.text)) {
+                            urlSet.add(item.text);
+                            merged.push(item);
+                        }
+                    }
+                } else {
+                    logger.warn('Parallel search: one provider failed', {
+                        traceId: params.traceId,
+                        error: String(settled.reason),
+                    });
+                }
+            }
+
+            if (merged.length === 0) {
+                throw new Error('Both search providers failed in parallel mode');
+            }
+
+            return merged;
+        }
+
+        // Default: google
+        return googleSearchFn(params);
     };
 
     /**
@@ -1031,7 +1149,7 @@ function configureToolsAndResources(
             const traceId = randomUUID();
             logger.info('google_search invoked', { traceId, query, num_results, time_range, site_search, exact_terms });
 
-            const content = await googleSearchFn({
+            const content = await searchFn({
                 query,
                 num_results,
                 time_range,
@@ -1270,8 +1388,8 @@ function configureToolsAndResources(
 
             try {
                 logger.info('search_and_scrape: searching', { traceId, query: trimmedQuery, num_results });
-                const searchPromise = googleSearchFn({ query: trimmedQuery, num_results, traceId });
-                searchResults = await withTimeout(searchPromise, SCRAPE_TIMEOUT_MS, 'Google Search');
+                const searchPromise = searchFn({ query: trimmedQuery, num_results, traceId });
+                searchResults = await withTimeout(searchPromise, SCRAPE_TIMEOUT_MS, 'Search');
                 logger.info('search_and_scrape: search completed', { traceId, urlsFound: searchResults.length });
             } catch (error) {
                 const errorMsg = `Search failed: ${sanitizeErrorMessage(error instanceof Error ? error.message : String(error))}`;
