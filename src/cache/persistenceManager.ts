@@ -403,7 +403,12 @@ export class PersistenceManager implements IPersistenceManager {
         
         // Process each entry file
         for (const entryFile of entryFiles) {
-          if (!entryFile.endsWith('.json') || entryFile.endsWith('.tmp')) {
+          // Clean up orphaned .tmp files from interrupted writes
+          if (entryFile.endsWith('.tmp')) {
+            fs.unlink(path.join(namespacePath, entryFile)).catch(() => {});
+            continue;
+          }
+          if (!entryFile.endsWith('.json')) {
             continue;
           }
           

@@ -13,13 +13,13 @@ export async function cleanupStaleLocks(basePath: string = 'storage'): Promise<v
     for (const lockDir of lockDirs) {
       try {
         await fs.rm(lockDir, { recursive: true, force: true });
-        console.log(`🧹 Cleaned up stale lock directory: ${lockDir}`);
-      } catch (error) {
-        console.warn(`⚠️ Could not remove lock directory ${lockDir}:`, error.message);
+        process.stderr.write(`Cleaned up stale lock directory: ${lockDir}\n`);
+      } catch (error: any) {
+        process.stderr.write(`Could not remove lock directory ${lockDir}: ${error.message}\n`);
       }
     }
-  } catch (error) {
-    console.warn('⚠️ Error during lock cleanup:', error.message);
+  } catch (error: any) {
+    process.stderr.write(`Error during lock cleanup: ${error.message}\n`);
   }
 }
 
@@ -48,7 +48,7 @@ async function findLockDirectories(basePath: string): Promise<string[]> {
   } catch (error) {
     // Ignore errors for non-existent directories
     if (error.code !== 'ENOENT') {
-      console.warn(`⚠️ Error reading directory ${basePath}:`, error.message);
+      process.stderr.write(`Error reading directory ${basePath}: ${error.message}\n`);
     }
   }
   
@@ -85,9 +85,9 @@ export async function cleanupTestStorage(testPaths: {
   
   try {
     await fs.rm(basePath, { recursive: true, force: true });
-    console.log(`🧹 Cleaned up test storage: ${basePath}`);
-  } catch (error) {
-    console.warn(`⚠️ Could not cleanup test storage ${basePath}:`, error.message);
+    process.stderr.write(`Cleaned up test storage: ${basePath}\n`);
+  } catch (error: any) {
+    process.stderr.write(`Could not cleanup test storage ${basePath}: ${error.message}\n`);
   }
 }
 
@@ -99,10 +99,10 @@ export async function cleanupAllTestStorage(): Promise<void> {
   
   try {
     await fs.rm(testTempPath, { recursive: true, force: true });
-    console.log(`🧹 Cleaned up all test storage: ${testTempPath}`);
-  } catch (error) {
+    process.stderr.write(`Cleaned up all test storage: ${testTempPath}\n`);
+  } catch (error: any) {
     if (error.code !== 'ENOENT') {
-      console.warn(`⚠️ Could not cleanup test storage ${testTempPath}:`, error.message);
+      process.stderr.write(`Could not cleanup test storage ${testTempPath}: ${error.message}\n`);
     }
   }
 }
@@ -134,7 +134,7 @@ export async function cleanupOpenHandles(): Promise<void> {
     // Enhanced Jest environment cleanup
     await cleanupJestTestEnvironment();
     
-  } catch (error) {
-    console.warn('⚠️ Error during open handles cleanup:', error.message);
+  } catch (error: any) {
+    process.stderr.write(`Error during open handles cleanup: ${error.message}\n`);
   }
 }

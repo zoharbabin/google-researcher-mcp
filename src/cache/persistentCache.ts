@@ -766,8 +766,12 @@ export class PersistentCache extends Cache {
         fs.mkdirSync(namespacesPath, { recursive: true });
       }
 
-      // Write each namespace to disk
+      // Write each namespace to disk, capped to prevent hanging on huge caches
+      const MAX_SYNC_WRITES = 2000;
+      let writeCount = 0;
       for (const [namespace, namespaceEntries] of this.namespaceCache.entries()) {
+        if (writeCount >= MAX_SYNC_WRITES) break;
+
         // Create the namespace directory if it doesn't exist
         const namespacePath = path.join(namespacesPath, encodeURIComponent(namespace));
         if (!fs.existsSync(namespacePath)) {
@@ -776,6 +780,8 @@ export class PersistentCache extends Cache {
 
         // Write each entry to disk
         for (const [hashedKey, entry] of namespaceEntries.entries()) { // Iterate over hashed keys
+          if (writeCount >= MAX_SYNC_WRITES) break;
+
           // Skip expired entries
           if (entry.expiresAt <= this.now()) { // Use this.now()
             continue;
@@ -799,6 +805,7 @@ export class PersistentCache extends Cache {
 
           // Write to disk
           fs.writeFileSync(entryPath, JSON.stringify(serializedEntry, null, 2), 'utf8');
+          writeCount++;
         }
       }
 

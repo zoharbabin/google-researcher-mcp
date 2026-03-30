@@ -346,7 +346,7 @@ export async function handlePatentSearch(
     const searchUrl = buildPatentSearchUrl({ ...params, traceId });
     logger.info('Patent search request', { traceId, query: trimmedQuery, searchType: params.search_type });
 
-    const response = await fetch(searchUrl);
+    const response = await fetch(searchUrl, { signal: AbortSignal.timeout(30_000) });
 
     if (!response.ok) {
       const errorText = await response.text();

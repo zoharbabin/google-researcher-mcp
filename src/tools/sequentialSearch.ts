@@ -106,6 +106,7 @@ export interface ResearchSession {
 const sessions = new Map<string, ResearchSession>();
 const sessionLastAccess = new Map<string, number>();
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_SESSIONS = 50;
 
 /**
  * Current active session ID (most recent)
@@ -140,6 +141,19 @@ if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
  * Creates a new research session
  */
 export function createSession(question: string, totalStepsEstimate: number = 5): ResearchSession {
+  // Evict expired sessions first, then oldest if still over limit
+  if (sessions.size >= MAX_SESSIONS) {
+    cleanupExpiredSessions();
+    if (sessions.size >= MAX_SESSIONS) {
+      const oldest = [...sessionLastAccess.entries()]
+        .sort((a, b) => a[1] - b[1])[0];
+      if (oldest) {
+        sessions.delete(oldest[0]);
+        sessionLastAccess.delete(oldest[0]);
+      }
+    }
+  }
+
   const sessionId = randomUUID();
   const now = new Date().toISOString();
 

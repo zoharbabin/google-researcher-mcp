@@ -46,6 +46,7 @@ interface CachedResource {
  */
 const resourceCache = new Map<string, CachedResource>();
 const RESOURCE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const MAX_RESOURCE_CACHE_SIZE = 500;
 
 /**
  * Cleanup expired resources periodically
@@ -93,6 +94,20 @@ export function createResourceLink(
   // Generate unique URI
   const id = randomUUID();
   const uri = `resource://${namespace}/${id}`;
+
+  // Evict oldest entries if cache is full
+  if (resourceCache.size >= MAX_RESOURCE_CACHE_SIZE) {
+    cleanupExpiredResources();
+    // If still full after expiry cleanup, evict oldest entries
+    if (resourceCache.size >= MAX_RESOURCE_CACHE_SIZE) {
+      const sorted = [...resourceCache.entries()]
+        .sort((a, b) => a[1].createdAt.getTime() - b[1].createdAt.getTime());
+      const toRemove = sorted.slice(0, Math.ceil(MAX_RESOURCE_CACHE_SIZE * 0.2));
+      for (const [key] of toRemove) {
+        resourceCache.delete(key);
+      }
+    }
+  }
 
   // Cache the content
   const now = new Date();

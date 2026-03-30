@@ -412,6 +412,8 @@ export class Cache {
       clearInterval(this.cleanupIntervalId);
       this.cleanupIntervalId = null;
     }
-    // Clear other resources if necessary in the future
+    this.cache.clear();
+    this.accessLog.clear();
+    this.pendingPromises.clear();
   }
 }

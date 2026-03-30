@@ -260,6 +260,7 @@ let globalMetricsCollector: MetricsCollector;
 let stdioServerInstance: McpServer | undefined;
 let stdioTransportInstance: StdioServerTransport | undefined;
 let httpTransportInstance: StreamableHTTPServerTransport | undefined;
+let httpServerInstance: import('node:http').Server | undefined;
 
 
 /**
@@ -394,26 +395,23 @@ function configureToolsAndResources(
 
     // 1) Extract each tool's implementation into its own async function with caching
     /**
-     * Creates a timeout promise that rejects after the specified duration
-     */
-    const createTimeoutPromise = (ms: number, operation: string) => {
-        return new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error(`${operation} timed out after ${ms}ms`)), ms);
-        });
-    };
-
-    /**
-     * Wraps a promise with a timeout
+     * Wraps a promise with a timeout.
+     * The timer is always cleared to prevent accumulation of orphaned timeouts.
      */
     const withTimeout = async <T>(
         promise: Promise<T>,
         timeoutMs: number,
         operation: string
     ): Promise<T> => {
-        return Promise.race([
-            promise,
-            createTimeoutPromise(timeoutMs, operation)
-        ]);
+        let timer: ReturnType<typeof setTimeout>;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs);
+        });
+        try {
+            return await Promise.race([promise, timeoutPromise]);
+        } finally {
+            clearTimeout(timer!);
+        }
     };
 
     // ── Circuit breakers for external API calls ──────────────────
@@ -644,9 +642,10 @@ function configureToolsAndResources(
 
         // Each crawler needs its own Configuration to avoid request queue corruption
         // when running multiple crawlers sequentially with maxRequestsPerCrawl: 1
+        const crawlerStorageDir = `${DEFAULT_CRAWLEE_STORAGE_PATH}/cheerio_${randomUUID()}`;
         const crawlerConfig = new Configuration({
             persistStorage: false,
-            storageClientOptions: { localDataDirectory: `${DEFAULT_CRAWLEE_STORAGE_PATH}/cheerio_${randomUUID()}` },
+            storageClientOptions: { localDataDirectory: crawlerStorageDir },
         });
         const crawler = new CheerioCrawler({
             requestHandler: async ({ $, body }) => {
@@ -693,8 +692,13 @@ function configureToolsAndResources(
             maxRequestsPerCrawl: 1,
             maxRequestRetries: 0,
         }, crawlerConfig);
-        const crawlPromise = crawler.run([{ url }]);
-        await withTimeout(crawlPromise, SCRAPE_TIMEOUT_MS, 'Web page scraping');
+        try {
+            const crawlPromise = crawler.run([{ url }]);
+            await withTimeout(crawlPromise, SCRAPE_TIMEOUT_MS, 'Web page scraping');
+        } finally {
+            // Clean up per-crawl storage directory to prevent disk bloat
+            fs.rm(crawlerStorageDir, { recursive: true, force: true }).catch(() => {});
+        }
         return { content: page, rawHtml, citation };
     }
 
@@ -709,9 +713,10 @@ function configureToolsAndResources(
         let citation: Citation | undefined;
 
         // Each crawler needs its own Configuration to avoid request queue corruption
+        const playwrightStorageDir = `${DEFAULT_CRAWLEE_STORAGE_PATH}/playwright_${randomUUID()}`;
         const crawlerConfig = new Configuration({
             persistStorage: false,
-            storageClientOptions: { localDataDirectory: `${DEFAULT_CRAWLEE_STORAGE_PATH}/playwright_${randomUUID()}` },
+            storageClientOptions: { localDataDirectory: playwrightStorageDir },
         });
         const crawler = new PlaywrightCrawler({
             requestHandler: async ({ page }) => {
@@ -856,8 +861,14 @@ function configureToolsAndResources(
                 userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             },
         }, crawlerConfig);
-        const crawlPromise = crawler.run([{ url }]);
-        await withTimeout(crawlPromise, PLAYWRIGHT_TIMEOUT_SECS * 1000, 'Playwright scraping');
+        try {
+            const crawlPromise = crawler.run([{ url }]);
+            await withTimeout(crawlPromise, PLAYWRIGHT_TIMEOUT_SECS * 1000, 'Playwright scraping');
+        } finally {
+            // Clean up storage dir and ensure browser process is terminated
+            fs.rm(playwrightStorageDir, { recursive: true, force: true }).catch(() => {});
+            crawler.teardown().catch(() => {});
+        }
         return { content: pageContent, rawHtml, citation };
     }
 
@@ -2624,6 +2635,14 @@ async function gracefulShutdown(signal: string) {
           await httpTransportInstance.close();
           logger.info('HTTP transport closed.');
         }
+        if (httpServerInstance) {
+          await new Promise<void>((resolve) => {
+            httpServerInstance!.close(() => resolve());
+            // Force-close lingering connections after 3s
+            setTimeout(() => resolve(), 3000).unref();
+          });
+          logger.info('HTTP server closed.');
+        }
 
         if (globalCacheInstance && typeof globalCacheInstance.dispose === 'function') {
           await globalCacheInstance.dispose();
@@ -2722,7 +2741,7 @@ process.on('unhandledRejection', (reason) => {
     const { app } = await createAppAndHttpTransport(globalCacheInstance, eventStoreInstance, oauthOpts);
 
     // Start the HTTP server with error handling
-    const server = app.listen(PORT, "::", () => {
+    httpServerInstance = app.listen(PORT, "::", () => {
         logger.info(`SSE server listening on port ${PORT}`, {
           endpoints: [
             `http://[::1]:${PORT}/mcp`,
@@ -2733,7 +2752,7 @@ process.on('unhandledRejection', (reason) => {
         });
       });
 
-    server.on('error', (err: NodeJS.ErrnoException) => {
+    httpServerInstance.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
         logger.warn(`Port ${PORT} already in use — HTTP transport disabled, STDIO transport remains active.`);
       } else {
