@@ -24,6 +24,10 @@
 | YouTube | Automatic transcript extraction |
 | `sequential_search` | Multi-step research tracking |
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/zoharbabin-google-researcher-mcp).
+
 ## Use Cases
 
 - **Research Assistants**: Enable Claude to search the web and synthesize information
