@@ -31,6 +31,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
+          registry-url: ${{ env.REGISTRY_URL }}
           
       - name: Install dependencies
         run: npm ci
@@ -66,8 +67,15 @@ jobs:
           echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
+      - name: Verify npm authentication
+        run: npm whoami --registry https://registry.npmjs.org/ || (echo "::error::NPM_TOKEN is invalid or expired. Create a Classic Automation token at https://www.npmjs.com/settings/tokens and update the NPM_TOKEN repo secret." && exit 1)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish to npm
         run: npm publish --tag latest --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           
       - name: Create SLSA attestation
         uses: actions/attest-build-provenance@v1
