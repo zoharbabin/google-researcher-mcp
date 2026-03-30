@@ -77,7 +77,7 @@ import {
   type GoogleNewsSearchResponse,
   getErrorMessage,
 } from "./types/googleApi.js";
-import { tavily } from "@tavily/core";
+import { tavily, type TavilySearchOptions } from "@tavily/core";
 import {
   sequentialSearchInputSchema,
   sequentialSearchOutputSchema,
@@ -440,6 +440,10 @@ function configureToolsAndResources(
     const SEARCH_PROVIDER = (process.env.SEARCH_PROVIDER || 'google') as 'google' | 'tavily' | 'parallel';
     const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
+    if (SEARCH_PROVIDER !== 'google' && !TAVILY_API_KEY) {
+        logger.warn('SEARCH_PROVIDER is set to tavily/parallel but TAVILY_API_KEY is not configured — searches will fail at runtime');
+    }
+
     // Lazily-initialized Tavily client (only created when needed)
     let tavilyClient: ReturnType<typeof tavily> | undefined;
     function getTavilyClient() {
@@ -452,13 +456,8 @@ function configureToolsAndResources(
         return tavilyClient;
     }
 
-    /** Map user-friendly time range names to Tavily timeRange values */
-    const TAVILY_TIME_RANGE_MAP: Record<string, string> = {
-        day: 'day',
-        week: 'week',
-        month: 'month',
-        year: 'year',
-    };
+    /** Supported Tavily time range values (whitelist validation) */
+    const TAVILY_SUPPORTED_TIME_RANGES = new Set(['day', 'week', 'month', 'year']);
 
     /**
      * Performs a Tavily search and returns results in the same TextContent[]
@@ -479,14 +478,14 @@ function configureToolsAndResources(
             logger.warn('Tavily: advanced filter params ignored', { traceId: params.traceId, unsupported });
         }
 
-        const searchOptions: Record<string, unknown> = {
+        const searchOptions: TavilySearchOptions = {
             maxResults: params.num_results,
-            searchDepth: 'basic' as const,
-            topic: 'general' as const,
+            searchDepth: 'basic',
+            topic: 'general',
         };
 
-        if (params.time_range && TAVILY_TIME_RANGE_MAP[params.time_range]) {
-            searchOptions.timeRange = TAVILY_TIME_RANGE_MAP[params.time_range];
+        if (params.time_range && TAVILY_SUPPORTED_TIME_RANGES.has(params.time_range)) {
+            searchOptions.timeRange = params.time_range as TavilySearchOptions['timeRange'];
         }
 
         // Map site filtering to Tavily's domain include/exclude

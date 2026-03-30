@@ -185,7 +185,7 @@ export interface GoogleNewsSearchResponse {
  * TODO: Currently unused — the actual data contract is TextContent[] (URL-only).
  * Reserved for a planned future refactor that surfaces titles/snippets downstream.
  */
-export interface NormalizedSearchResult {
+interface NormalizedSearchResult {
   /** Result title */
   title: string;
   /** URL of the result */
