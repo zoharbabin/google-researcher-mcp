@@ -80,6 +80,7 @@
   "dependencies": {
     "@danielxceron/youtube-transcript": "^1.2.6",
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@tavily/core": "^0.7.2",
     "cheerio": "1.0.0-rc.12",
     "cors": "^2.8.5",
     "crawlee": "^3.13.2",

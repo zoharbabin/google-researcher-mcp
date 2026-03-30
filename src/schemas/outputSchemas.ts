@@ -488,7 +488,7 @@ export const patentSearchOutputSchema = {
   /** Search type used */
   searchType: z.enum(['prior_art', 'specific', 'landscape']).describe('Type of patent search'),
   /** Data source */
-  source: z.literal('Google Patents').describe('Data source'),
+  source: z.enum(['Google Patents', 'Tavily (Google Patents)']).describe('Data source'),
 };
 
 /** Inferred type for patent result */
@@ -501,5 +501,5 @@ export type PatentSearchOutput = {
   totalResults: number;
   resultCount: number;
   searchType: 'prior_art' | 'specific' | 'landscape';
-  source: 'Google Patents';
+  source: 'Google Patents' | 'Tavily (Google Patents)';
 };

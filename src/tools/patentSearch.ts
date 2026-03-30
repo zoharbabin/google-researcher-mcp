@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { tavily } from '@tavily/core';
 import { logger } from '../shared/logger.js';
 import type { PatentResultOutput, PatentSearchOutput } from '../schemas/outputSchemas.js';
 import type { GoogleSearchItem, GoogleSearchResponse } from '../types/googleApi.js';
@@ -308,7 +309,209 @@ function parsePatentResult(item: GoogleSearchItem): PatentResultOutput | null {
   return result;
 }
 
+// ── Tavily Search Helpers ──────────────────────────────────────────────────
+
+/**
+ * Build a free-text query string for Tavily patent search.
+ * Replicates the same logic as buildPatentSearchUrl but without
+ * Google-specific URL construction or site: operator.
+ */
+function buildTavilyPatentQuery(params: PatentSearchInput): string {
+  const queryParts: string[] = [];
+
+  queryParts.push(params.query.trim());
+
+  if (params.patent_office && params.patent_office !== 'all') {
+    queryParts.push(`patent ${params.patent_office}`);
+  }
+
+  if (params.assignee) {
+    const variations = generateCompanyNameVariations(params.assignee);
+    if (variations.length === 1) {
+      queryParts.push(`"${variations[0]}"`);
+    } else if (variations.length > 1) {
+      const topVariations = variations.slice(0, 4);
+      const orQuery = topVariations.map(v => `"${v}"`).join(' OR ');
+      queryParts.push(`(${orQuery})`);
+    }
+  }
+
+  if (params.inventor) {
+    queryParts.push(`"${params.inventor}"`);
+  }
+
+  if (params.cpc_code) {
+    queryParts.push(`"${params.cpc_code}"`);
+  }
+
+  if (params.year_from || params.year_to) {
+    const from = params.year_from ?? 1900;
+    const to = params.year_to ?? new Date().getFullYear();
+    queryParts.push(`${from}..${to}`);
+  }
+
+  return queryParts.join(' ');
+}
+
+/**
+ * Parse a Tavily search result into a PatentResultOutput.
+ */
+function parseTavilyPatentResult(item: { title: string; url: string; content: string }): PatentResultOutput | null {
+  const patentNumber = extractPatentNumber(item.url);
+  if (!patentNumber) {
+    return null;
+  }
+
+  const snippet = item.content || '';
+  const title = item.title
+    .replace(/\s*-\s*Google Patents\s*$/i, '')
+    .replace(/^\s*\[[^\]]+\]\s*/, '')
+    .trim();
+
+  const result: PatentResultOutput = {
+    title,
+    patentNumber,
+    url: item.url,
+    abstract: snippet,
+    patentOffice: extractPatentOffice(patentNumber),
+    pdfUrl: generatePdfUrl(patentNumber),
+  };
+
+  const inventors = extractInventorsFromSnippet(snippet);
+  if (inventors.length > 0) {
+    result.inventors = inventors;
+  }
+
+  const assignee = extractAssigneeFromSnippet(snippet);
+  if (assignee) {
+    result.assignee = assignee;
+  }
+
+  if (!result.publicationDate) {
+    const year = extractYearFromSnippet(snippet);
+    if (year) {
+      result.publicationDate = String(year);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Execute patent search via Tavily with include_domains restriction.
+ */
+async function handleTavilyPatentSearch(
+  params: PatentSearchInput,
+  traceId?: string,
+): Promise<{
+  isError?: boolean;
+  content: Array<{ type: 'text'; text: string }>;
+  structuredContent: PatentSearchOutput;
+}> {
+  const tavilyApiKey = process.env.TAVILY_API_KEY;
+  const trimmedQuery = params.query.trim();
+
+  if (!tavilyApiKey) {
+    logger.error('Missing TAVILY_API_KEY for patent search', { traceId });
+    return {
+      isError: true,
+      content: [{ type: 'text', text: 'Missing TAVILY_API_KEY environment variable.' }],
+      structuredContent: {
+        patents: [],
+        query: trimmedQuery,
+        totalResults: 0,
+        resultCount: 0,
+        searchType: params.search_type ?? 'prior_art',
+        source: 'Tavily (Google Patents)',
+      },
+    };
+  }
+
+  try {
+    const client = tavily({ apiKey: tavilyApiKey });
+    const query = buildTavilyPatentQuery(params);
+    logger.info('Patent search request (Tavily)', { traceId, query, searchType: params.search_type });
+
+    const response = await client.search(query, {
+      maxResults: params.num_results ?? 5,
+      searchDepth: 'advanced',
+      includeDomains: ['patents.google.com'],
+    });
+
+    const patents: PatentResultOutput[] = [];
+    for (const item of response.results) {
+      const patent = parseTavilyPatentResult(item);
+      if (patent) {
+        patents.push(patent);
+      }
+    }
+
+    logger.info('Patent search completed (Tavily)', { traceId, returned: patents.length });
+
+    const textParts: string[] = [
+      `Patent search for "${trimmedQuery}"`,
+      `Found ${patents.length} patents via Tavily.`,
+      '',
+    ];
+
+    for (let i = 0; i < patents.length; i++) {
+      const p = patents[i];
+      textParts.push(`${i + 1}. ${p.title}`);
+      textParts.push(`   Patent: ${p.patentNumber}`);
+      if (p.assignee) textParts.push(`   Assignee: ${p.assignee}`);
+      if (p.inventors?.length) textParts.push(`   Inventors: ${p.inventors.join(', ')}`);
+      if (p.publicationDate) textParts.push(`   Date: ${p.publicationDate}`);
+      textParts.push(`   URL: ${p.url}`);
+      if (p.abstract) textParts.push(`   ${p.abstract.substring(0, 200)}...`);
+      textParts.push('');
+    }
+
+    return {
+      content: [{ type: 'text', text: textParts.join('\n') }],
+      structuredContent: {
+        patents,
+        query: trimmedQuery,
+        totalResults: patents.length,
+        resultCount: patents.length,
+        searchType: params.search_type ?? 'prior_art',
+        source: 'Tavily (Google Patents)',
+      },
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error('Patent search failed (Tavily)', { traceId, error: errorMessage });
+
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `Patent search failed: ${errorMessage}` }],
+      structuredContent: {
+        patents: [],
+        query: trimmedQuery,
+        totalResults: 0,
+        resultCount: 0,
+        searchType: params.search_type ?? 'prior_art',
+        source: 'Tavily (Google Patents)',
+      },
+    };
+  }
+}
+
 // ── Main Handler ───────────────────────────────────────────────────────────
+
+/**
+ * Determine whether to use Tavily or Google for patent search.
+ * Tavily is used when SEARCH_PROVIDER=tavily or when TAVILY_API_KEY is set
+ * and Google credentials are absent.
+ */
+function useTavilyProvider(): boolean {
+  const provider = process.env.SEARCH_PROVIDER?.toLowerCase();
+  if (provider === 'tavily') return true;
+  if (provider === 'google') return false;
+  // Fallback: use Tavily only if Google credentials are missing but Tavily key exists
+  const hasGoogle = !!(process.env.GOOGLE_CUSTOM_SEARCH_API_KEY && process.env.GOOGLE_CUSTOM_SEARCH_ID);
+  const hasTavily = !!process.env.TAVILY_API_KEY;
+  return !hasGoogle && hasTavily;
+}
 
 /**
  * Handle patent search request
@@ -321,6 +524,11 @@ export async function handlePatentSearch(
   content: Array<{ type: 'text'; text: string }>;
   structuredContent: PatentSearchOutput;
 }> {
+  // Route to Tavily if configured
+  if (useTavilyProvider()) {
+    return handleTavilyPatentSearch(params, traceId);
+  }
+
   const apiKey = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY;
   const searchId = process.env.GOOGLE_CUSTOM_SEARCH_ID;
 
