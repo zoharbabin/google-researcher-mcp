@@ -14,6 +14,7 @@
  */
 
 import { z } from 'zod';
+import { tavily } from '@tavily/core';
 import { getErrorMessage, GoogleSearchResponse, GoogleSearchItem } from '../types/googleApi.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -481,6 +482,190 @@ function generateCitations(paper: {
   return { apa, mla, bibtex };
 }
 
+// ── Tavily Helpers ───────────────────────────────────────────────────────────
+
+/** Domain subsets for source-specific Tavily queries */
+const TAVILY_SOURCE_DOMAINS: Record<string, string[]> = {
+  'arxiv': ['arxiv.org'],
+  'pubmed': ['pubmed.ncbi.nlm.nih.gov', 'ncbi.nlm.nih.gov'],
+  'ieee': ['ieee.org', 'ieeexplore.ieee.org'],
+  'nature': ['nature.com'],
+  'springer': ['springer.com', 'link.springer.com'],
+};
+
+/**
+ * Tavily search result type (subset of fields we use)
+ */
+interface TavilySearchResult {
+  title: string;
+  url: string;
+  content: string;
+  score: number;
+  publishedDate?: string;
+}
+
+/**
+ * Extracts authors from a Tavily result content snippet
+ */
+function extractAuthorsFromSnippet(content: string): string[] {
+  // Try "by Author Name - 2023" pattern
+  const byMatch = content.match(/^by\s+([^-–—]+?)(?:\s*[-–—]|$)/i);
+  if (byMatch) {
+    const authorStr = byMatch[1].trim();
+    const authorList = authorStr.split(/,\s*(?:and\s+)?|\s+and\s+/i);
+    const authors = authorList.map(a => a.trim()).filter(a => a && a.length < 50);
+    if (authors.length > 0) return authors;
+  }
+  return ['Unknown Author'];
+}
+
+/**
+ * Extracts publication year from content or URL
+ */
+function extractYearFromContent(content: string, url: string, publishedDate?: string): number | undefined {
+  if (publishedDate) {
+    const yearMatch = publishedDate.match(/(\d{4})/);
+    if (yearMatch) return parseInt(yearMatch[1], 10);
+  }
+  const yearMatch = content.match(/\b(19|20)\d{2}\b/);
+  if (yearMatch) {
+    const year = parseInt(yearMatch[0], 10);
+    if (year >= 1900 && year <= new Date().getFullYear() + 1) return year;
+  }
+  const urlYearMatch = url.match(/\/(\d{4})\//);
+  if (urlYearMatch) {
+    const year = parseInt(urlYearMatch[1], 10);
+    if (year >= 1900 && year <= new Date().getFullYear() + 1) return year;
+  }
+  return undefined;
+}
+
+/**
+ * Determines venue name from a URL domain
+ */
+function venueFromDomain(url: string): string {
+  const venueMap: Record<string, string> = {
+    'arxiv': 'arXiv',
+    'pubmed': 'PubMed',
+    'ncbi': 'NCBI',
+    'ieee': 'IEEE',
+    'acm': 'ACM Digital Library',
+    'nature': 'Nature',
+    'sciencedirect': 'ScienceDirect',
+    'springer': 'Springer',
+    'researchgate': 'ResearchGate',
+    'biorxiv': 'bioRxiv',
+    'medrxiv': 'medRxiv',
+    'plos': 'PLOS',
+    'frontiersin': 'Frontiers',
+    'mdpi': 'MDPI',
+    'wiley': 'Wiley',
+    'jstor': 'JSTOR',
+  };
+
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, '');
+    const siteName = hostname.split('.')[0];
+    return venueMap[siteName.toLowerCase()] || siteName.charAt(0).toUpperCase() + siteName.slice(1);
+  } catch {
+    return 'Unknown';
+  }
+}
+
+/**
+ * Converts a Tavily search result into an AcademicPaperResult
+ */
+function tavilyResultToPaper(result: TavilySearchResult): AcademicPaperResult {
+  const authors = extractAuthorsFromSnippet(result.content);
+  const year = extractYearFromContent(result.content, result.url, result.publishedDate);
+  const venue = venueFromDomain(result.url);
+
+  // Extract DOI from URL
+  const doiUrlMatch = result.url.match(/doi\.org\/(10\.\d{4,}\/[^\s?#]+)/);
+  const doi = doiUrlMatch ? doiUrlMatch[1] : undefined;
+
+  // Extract arXiv ID from URL
+  const arxivMatch = result.url.match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5}(?:v\d+)?)/i);
+  const arxivId = arxivMatch ? arxivMatch[1] : undefined;
+
+  // PDF URL
+  let pdfUrl: string | undefined;
+  if (result.url.endsWith('.pdf')) {
+    pdfUrl = result.url;
+  } else if (result.url.includes('arxiv.org/abs/')) {
+    pdfUrl = result.url.replace('/abs/', '/pdf/') + '.pdf';
+  }
+
+  // Clean title
+  const title = result.title
+    .replace(/\s*[-|]\s*(arXiv|PubMed|IEEE|Nature|Springer|ResearchGate).*$/i, '')
+    .replace(/\s*\[.*\]\s*$/, '')
+    .trim();
+
+  const abstract = result.content && result.content.length > 50 ? result.content : undefined;
+
+  let hostname: string;
+  try {
+    hostname = new URL(result.url).hostname;
+  } catch {
+    hostname = 'unknown';
+  }
+
+  return {
+    title,
+    authors,
+    year,
+    venue,
+    abstract,
+    url: result.url,
+    pdfUrl,
+    doi,
+    arxivId,
+    source: hostname,
+    citations: generateCitations({ title, authors, year, venue, doi, url: result.url }),
+  };
+}
+
+/**
+ * Performs academic search using Tavily
+ */
+async function searchWithTavily(
+  query: string,
+  numResults: number,
+  source: string,
+  yearFrom?: number,
+  yearTo?: number,
+): Promise<{ papers: AcademicPaperResult[]; totalResults: number }> {
+  const tavilyApiKey = process.env.TAVILY_API_KEY!;
+  const client = tavily({ apiKey: tavilyApiKey });
+
+  // Determine which domains to include
+  const includeDomains = source !== 'all' && TAVILY_SOURCE_DOMAINS[source]
+    ? TAVILY_SOURCE_DOMAINS[source]
+    : ACADEMIC_SITES;
+
+  const response = await client.search(query, {
+    maxResults: Math.min(numResults, 20),
+    searchDepth: 'advanced',
+    topic: 'general',
+    includeDomains: includeDomains,
+  });
+
+  let papers = (response.results as TavilySearchResult[]).map(tavilyResultToPaper);
+
+  // Post-filter by year if specified
+  if (yearFrom || yearTo) {
+    papers = papers.filter(paper => {
+      if (!paper.year) return true; // Keep papers without year info
+      if (yearFrom && paper.year < yearFrom) return false;
+      if (yearTo && paper.year > yearTo) return false;
+      return true;
+    });
+  }
+
+  return { papers, totalResults: papers.length };
+}
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 /**
@@ -495,6 +680,16 @@ export type AcademicSearchInput = {
   pdf_only?: boolean;
   sort_by?: 'relevance' | 'date';
 };
+
+/**
+ * Determines whether to use Tavily based on env vars
+ */
+function useTavilyProvider(): boolean {
+  return !!(
+    process.env.TAVILY_API_KEY &&
+    process.env.SEARCH_PROVIDER?.toLowerCase() === 'tavily'
+  );
+}
 
 /**
  * Handler for the academic_search tool
@@ -514,130 +709,155 @@ export async function handleAcademicSearch(input: AcademicSearchInput): Promise<
     sort_by = 'relevance',
   } = input;
 
-  // Check for required environment variables
-  const apiKey = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY;
-  const searchId = process.env.GOOGLE_CUSTOM_SEARCH_ID;
+  // Determine search provider
+  const isTavily = useTavilyProvider();
 
-  if (!apiKey || !searchId) {
-    return {
-      content: [{ type: 'text', text: 'Academic search failed: Missing Google API credentials (GOOGLE_CUSTOM_SEARCH_API_KEY or GOOGLE_CUSTOM_SEARCH_ID)' }],
-      structuredContent: {
-        papers: [],
-        query: query.trim(),
-        totalResults: 0,
-        resultCount: 0,
-        source: 'Google Scholar Search',
-      },
-      isError: true,
-    };
+  if (!isTavily) {
+    // Check for required Google environment variables
+    const apiKey = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY;
+    const searchId = process.env.GOOGLE_CUSTOM_SEARCH_ID;
+
+    if (!apiKey || !searchId) {
+      return {
+        content: [{ type: 'text', text: 'Academic search failed: Missing Google API credentials (GOOGLE_CUSTOM_SEARCH_API_KEY or GOOGLE_CUSTOM_SEARCH_ID)' }],
+        structuredContent: {
+          papers: [],
+          query: query.trim(),
+          totalResults: 0,
+          resultCount: 0,
+          source: 'Google Scholar Search',
+        },
+        isError: true,
+      };
+    }
   }
 
   try {
-    // Build search query with site filters
-    let searchQuery = query.trim();
+    let papers: AcademicPaperResult[];
+    let totalResults: number;
+    const providerLabel = isTavily ? 'Tavily Academic Search' : 'Google Scholar Search';
 
-    // Add site filter based on source selection
-    const siteFilters: Record<string, string> = {
-      'arxiv': 'site:arxiv.org',
-      'pubmed': 'site:pubmed.ncbi.nlm.nih.gov OR site:ncbi.nlm.nih.gov',
-      'ieee': 'site:ieee.org OR site:ieeexplore.ieee.org',
-      'nature': 'site:nature.com',
-      'springer': 'site:springer.com OR site:link.springer.com',
-    };
+    if (isTavily) {
+      // ── Tavily code path ────────────────────────────────────────────────
+      const result = await searchWithTavily(query.trim(), num_results, source, year_from, year_to);
+      papers = result.papers;
+      totalResults = result.totalResults;
 
-    if (source !== 'all' && siteFilters[source]) {
-      searchQuery = `${searchQuery} ${siteFilters[source]}`;
-    } else if (source === 'all') {
-      // Search across all academic sites
-      const siteQuery = ACADEMIC_SITES.slice(0, 10).map(s => `site:${s}`).join(' OR ');
-      searchQuery = `${searchQuery} (${siteQuery})`;
-    }
-
-    // Add year filter
-    if (year_from || year_to) {
-      if (year_from && year_to) {
-        searchQuery = `${searchQuery} ${year_from}..${year_to}`;
-      } else if (year_from) {
-        searchQuery = `${searchQuery} after:${year_from - 1}`;
-      } else if (year_to) {
-        searchQuery = `${searchQuery} before:${year_to + 1}`;
+      // Post-filter for PDF-only if requested
+      if (pdf_only) {
+        papers = papers.filter(p => p.pdfUrl);
       }
-    }
+    } else {
+      // ── Google code path (existing) ─────────────────────────────────────
+      const apiKey = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY!;
+      const searchId = process.env.GOOGLE_CUSTOM_SEARCH_ID!;
 
-    // Add PDF filter
-    if (pdf_only) {
-      searchQuery = `${searchQuery} filetype:pdf`;
-    }
+      // Build search query with site filters
+      let searchQuery = query.trim();
 
-    // Build Google Custom Search URL
-    const params = new URLSearchParams({
-      key: apiKey,
-      cx: searchId,
-      q: searchQuery,
-      num: String(Math.min(num_results, 10)),
-    });
-
-    // Add date sorting if requested
-    if (sort_by === 'date') {
-      params.set('sort', 'date');
-    }
-
-    const url = `${GOOGLE_SEARCH_API}?${params.toString()}`;
-
-    // Make API request
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      },
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Google API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json() as GoogleSearchResponse;
-
-    // Process results
-    const items = data.items || [];
-    const totalResults = parseInt(data.searchInformation?.totalResults || '0', 10);
-
-    // Transform to academic paper format
-    const papers: AcademicPaperResult[] = items.map(item => {
-      const authors = extractAuthors(item);
-      const year = extractYear(item);
-      const venue = extractVenue(item);
-      const doi = extractDOI(item);
-      const arxivId = extractArxivId(item);
-      const pdfUrl = extractPdfUrl(item);
-      const abstract = extractAbstract(item);
-
-      // Clean title (remove site name suffixes)
-      let title = item.title
-        .replace(/\s*[-|]\s*(arXiv|PubMed|IEEE|Nature|Springer|ResearchGate).*$/i, '')
-        .replace(/\s*\[.*\]\s*$/, '')
-        .trim();
-
-      return {
-        title,
-        authors,
-        year,
-        venue,
-        abstract,
-        url: item.link,
-        pdfUrl,
-        doi,
-        arxivId,
-        source: item.displayLink,
-        citations: generateCitations({ title, authors, year, venue, doi, url: item.link }),
+      // Add site filter based on source selection
+      const siteFilters: Record<string, string> = {
+        'arxiv': 'site:arxiv.org',
+        'pubmed': 'site:pubmed.ncbi.nlm.nih.gov OR site:ncbi.nlm.nih.gov',
+        'ieee': 'site:ieee.org OR site:ieeexplore.ieee.org',
+        'nature': 'site:nature.com',
+        'springer': 'site:springer.com OR site:link.springer.com',
       };
-    });
+
+      if (source !== 'all' && siteFilters[source]) {
+        searchQuery = `${searchQuery} ${siteFilters[source]}`;
+      } else if (source === 'all') {
+        // Search across all academic sites
+        const siteQuery = ACADEMIC_SITES.slice(0, 10).map(s => `site:${s}`).join(' OR ');
+        searchQuery = `${searchQuery} (${siteQuery})`;
+      }
+
+      // Add year filter
+      if (year_from || year_to) {
+        if (year_from && year_to) {
+          searchQuery = `${searchQuery} ${year_from}..${year_to}`;
+        } else if (year_from) {
+          searchQuery = `${searchQuery} after:${year_from - 1}`;
+        } else if (year_to) {
+          searchQuery = `${searchQuery} before:${year_to + 1}`;
+        }
+      }
+
+      // Add PDF filter
+      if (pdf_only) {
+        searchQuery = `${searchQuery} filetype:pdf`;
+      }
+
+      // Build Google Custom Search URL
+      const params = new URLSearchParams({
+        key: apiKey,
+        cx: searchId,
+        q: searchQuery,
+        num: String(Math.min(num_results, 10)),
+      });
+
+      // Add date sorting if requested
+      if (sort_by === 'date') {
+        params.set('sort', 'date');
+      }
+
+      const url = `${GOOGLE_SEARCH_API}?${params.toString()}`;
+
+      // Make API request
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Google API error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json() as GoogleSearchResponse;
+
+      // Process results
+      const items = data.items || [];
+      totalResults = parseInt(data.searchInformation?.totalResults || '0', 10);
+
+      // Transform to academic paper format
+      papers = items.map(item => {
+        const authors = extractAuthors(item);
+        const year = extractYear(item);
+        const venue = extractVenue(item);
+        const doi = extractDOI(item);
+        const arxivId = extractArxivId(item);
+        const pdfUrl = extractPdfUrl(item);
+        const abstract = extractAbstract(item);
+
+        // Clean title (remove site name suffixes)
+        let title = item.title
+          .replace(/\s*[-|]\s*(arXiv|PubMed|IEEE|Nature|Springer|ResearchGate).*$/i, '')
+          .replace(/\s*\[.*\]\s*$/, '')
+          .trim();
+
+        return {
+          title,
+          authors,
+          year,
+          venue,
+          abstract,
+          url: item.link,
+          pdfUrl,
+          doi,
+          arxivId,
+          source: item.displayLink,
+          citations: generateCitations({ title, authors, year, venue, doi, url: item.link }),
+        };
+      });
+    }
 
     // Build text content
     let textContent = `Academic Search Results for: "${query}"\n`;
-    textContent += `Source: Google Scholar Search (${source === 'all' ? 'all academic sources' : source})\n`;
+    textContent += `Source: ${isTavily ? 'Tavily Academic Search' : 'Google Scholar Search'} (${source === 'all' ? 'all academic sources' : source})\n`;
     textContent += `Found approximately ${totalResults} results, showing ${papers.length}\n\n`;
 
     papers.forEach((paper, index) => {
