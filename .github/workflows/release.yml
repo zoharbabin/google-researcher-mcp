@@ -31,7 +31,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          registry-url: ${{ env.REGISTRY_URL }}
           
       - name: Install dependencies
         run: npm ci
