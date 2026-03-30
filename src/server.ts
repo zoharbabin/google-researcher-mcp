@@ -340,10 +340,10 @@ async function initializeGlobalInstances(
   // Initialize metrics collector for per-tool execution metrics
   globalMetricsCollector = new MetricsCollector();
 
-  // Load data eagerly
-  await globalCacheInstance.loadFromDisk(); // Cache needs explicit load
-  // Event store loads eagerly via constructor option, no explicit call needed here
-  logger.info('Global Cache, Event Store, YouTube Transcript Extractor, and Metrics Collector initialized.');
+  // Note: cache.loadFromDisk() is called AFTER the STDIO transport is established
+  // (see main execution block) so the MCP client can connect immediately.
+  // Event store loads eagerly via constructor option, no explicit call needed here.
+  logger.info('Global instances created (cache will load in background).');
 }
 
 // --- Tool/Resource Configuration (Moved to Top Level) ---
@@ -2685,16 +2685,26 @@ process.on('unhandledRejection', (reason) => {
  * based on execution context (direct run vs. import) and environment variables.
  */
 (async () => {
-  // Initialize global cache and event store first
+  // Initialize global instances (cache, event store, etc.).
+  // Defer the expensive eager-load of the persistent cache so the STDIO
+  // transport can be established first — the MCP client needs a responsive
+  // connection immediately, while the cache can warm in the background.
   await initializeGlobalInstances();
 
-  // Setup STDIO transport (skip inside Jest workers — the StdioServerTransport
-  // connects to stdin which keeps Jest workers alive indefinitely).
-  // Note: E2E tests spawn the server as a child process and DO need stdio transport,
-  // so we only check JEST_WORKER_ID (set exclusively by Jest), not NODE_ENV.
+  // Setup STDIO transport BEFORE the cache finishes loading. This ensures
+  // the MCP client can connect and start exchanging messages right away.
+  // Tools that hit the cache will simply get cache misses until it's warm.
   if (!process.env.JEST_WORKER_ID) {
     await setupStdioTransport();
   }
+
+  // Now load the cache in the background — this can take many seconds for
+  // large caches (e.g. 7k+ files / 100+ MB) and must not block the transport.
+  globalCacheInstance.loadFromDisk().then(() => {
+    logger.info('Persistent cache loaded from disk.');
+  }).catch((err: unknown) => {
+    logger.warn('Failed to load persistent cache from disk, starting with empty cache.', { error: String(err) });
+  });
 
   // If MCP_TEST_MODE is 'stdio', DO NOT start HTTP listener.
   if (process.env.MCP_TEST_MODE === 'stdio') {
