@@ -496,7 +496,7 @@ const TAVILY_SOURCE_DOMAINS: Record<string, string[]> = {
 /**
  * Tavily search result type (subset of fields we use)
  */
-interface TavilySearchResult {
+export interface TavilySearchResult {
   title: string;
   url: string;
   content: string;
@@ -507,7 +507,7 @@ interface TavilySearchResult {
 /**
  * Extracts authors from a Tavily result content snippet
  */
-function extractAuthorsFromSnippet(content: string): string[] {
+export function extractAuthorsFromSnippet(content: string): string[] {
   // Try "by Author Name - 2023" pattern
   const byMatch = content.match(/^by\s+([^-–—]+?)(?:\s*[-–—]|$)/i);
   if (byMatch) {
@@ -522,7 +522,7 @@ function extractAuthorsFromSnippet(content: string): string[] {
 /**
  * Extracts publication year from content or URL
  */
-function extractYearFromContent(content: string, url: string, publishedDate?: string): number | undefined {
+export function extractYearFromContent(content: string, url: string, publishedDate?: string): number | undefined {
   if (publishedDate) {
     const yearMatch = publishedDate.match(/(\d{4})/);
     if (yearMatch) return parseInt(yearMatch[1], 10);
@@ -543,7 +543,7 @@ function extractYearFromContent(content: string, url: string, publishedDate?: st
 /**
  * Determines venue name from a URL domain
  */
-function venueFromDomain(url: string): string {
+export function venueFromDomain(url: string): string {
   const venueMap: Record<string, string> = {
     'arxiv': 'arXiv',
     'pubmed': 'PubMed',
@@ -575,7 +575,7 @@ function venueFromDomain(url: string): string {
 /**
  * Converts a Tavily search result into an AcademicPaperResult
  */
-function tavilyResultToPaper(result: TavilySearchResult): AcademicPaperResult {
+export function tavilyResultToPaper(result: TavilySearchResult): AcademicPaperResult {
   const authors = extractAuthorsFromSnippet(result.content);
   const year = extractYearFromContent(result.content, result.url, result.publishedDate);
   const venue = venueFromDomain(result.url);
@@ -653,10 +653,11 @@ async function searchWithTavily(
 
   let papers = (response.results as TavilySearchResult[]).map(tavilyResultToPaper);
 
-  // Post-filter by year if specified
+  // Post-filter by year if specified — drop papers with unknown year
+  // since we cannot confirm they fall within the requested range
   if (yearFrom || yearTo) {
     papers = papers.filter(paper => {
-      if (!paper.year) return true; // Keep papers without year info
+      if (!paper.year) return false;
       if (yearFrom && paper.year < yearFrom) return false;
       if (yearTo && paper.year > yearTo) return false;
       return true;
@@ -682,12 +683,14 @@ export type AcademicSearchInput = {
 };
 
 /**
- * Determines whether to use Tavily based on env vars
+ * Determines whether to use Tavily based on env vars.
+ * Supports SEARCH_PROVIDER values: 'tavily' and 'parallel'.
  */
 function useTavilyProvider(): boolean {
+  const provider = process.env.SEARCH_PROVIDER?.toLowerCase();
   return !!(
     process.env.TAVILY_API_KEY &&
-    process.env.SEARCH_PROVIDER?.toLowerCase() === 'tavily'
+    (provider === 'tavily' || provider === 'parallel')
   );
 }
 
