@@ -430,6 +430,12 @@ function configureToolsAndResources(
         onStateChange: (from, to) => logger.warn('Web scraping circuit breaker state change', { from, to }),
     });
 
+    const tavilySearchCircuit = new CircuitBreaker({
+        failureThreshold: 5,
+        resetTimeout: 60_000,
+        onStateChange: (from, to) => logger.warn('Tavily Search circuit breaker state change', { from, to }),
+    });
+
     // ── Tavily Search Provider ────────────────────────────────────
     const SEARCH_PROVIDER = (process.env.SEARCH_PROVIDER || 'google') as 'google' | 'tavily' | 'parallel';
     const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
@@ -458,15 +464,20 @@ function configureToolsAndResources(
      * Performs a Tavily search and returns results in the same TextContent[]
      * format as googleSearchFn (an array of { type: "text", text: url }).
      */
-    const tavilySearchFn = async (params: {
-        query: string;
-        num_results: number;
-        time_range?: string;
-        traceId?: string;
-        siteSearch?: string;
-        siteSearchFilter?: 'i' | 'e';
-    }): Promise<TextContent[]> => {
+    const tavilySearchFn = async (params: GoogleSearchParams): Promise<TextContent[]> => {
         const client = getTavilyClient();
+        const trimmedQuery = params.query.trim();
+
+        // Warn about unsupported Google-specific params that Tavily cannot honour
+        const unsupported: string[] = [];
+        if (params.exactTerms) unsupported.push('exactTerms');
+        if (params.excludeTerms) unsupported.push('excludeTerms');
+        if (params.language) unsupported.push('language');
+        if (params.country) unsupported.push('country');
+        if (params.safe) unsupported.push('safe');
+        if (unsupported.length > 0) {
+            logger.warn('Tavily: advanced filter params ignored', { traceId: params.traceId, unsupported });
+        }
 
         const searchOptions: Record<string, unknown> = {
             maxResults: params.num_results,
@@ -487,16 +498,38 @@ function configureToolsAndResources(
             }
         }
 
-        logger.debug('Tavily search executing', { traceId: params.traceId, query: params.query, options: searchOptions });
+        // Build cache key from relevant parameters
+        const cacheArgs = {
+            query: trimmedQuery,
+            num_results: params.num_results,
+            time_range: params.time_range,
+            siteSearch: params.siteSearch,
+            siteSearchFilter: params.siteSearchFilter,
+        };
 
-        const response = await withTimeout(
-            client.search(params.query, searchOptions),
-            SEARCH_TIMEOUT_MS,
-            'Tavily Search API'
+        return globalCacheInstance.getOrCompute(
+            'tavilySearch',
+            cacheArgs,
+            async () => {
+                logger.debug('Tavily search executing (cache MISS)', { traceId: params.traceId, query: trimmedQuery, options: searchOptions });
+
+                const response = await tavilySearchCircuit.execute(async () => {
+                    return withTimeout(
+                        client.search(trimmedQuery, searchOptions),
+                        SEARCH_TIMEOUT_MS,
+                        'Tavily Search API'
+                    );
+                });
+
+                const links: string[] = (response.results || []).map((r: { url: string }) => r.url);
+                return links.map((l) => ({ type: "text" as const, text: l }));
+            },
+            {
+                ttl: SEARCH_CACHE_TTL_MS,
+                staleWhileRevalidate: true,
+                staleTime: 30 * 60 * 1000,
+            }
         );
-
-        const links: string[] = (response.results || []).map((r: { url: string }) => r.url);
-        return links.map((l) => ({ type: "text" as const, text: l }));
     };
 
     /** Map user-friendly time range names to Google dateRestrict values */

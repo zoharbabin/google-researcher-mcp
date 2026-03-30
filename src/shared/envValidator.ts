@@ -107,9 +107,9 @@ export const ENV_VALIDATION_RULES: EnvValidationRule[] = [
   {
     name: 'TAVILY_API_KEY',
     required: false,
-    description: 'Tavily API key for web search (enables Tavily provider when set)',
+    pattern: /^tvly-[A-Za-z0-9]{28,}$/,
+    description: 'Tavily API key must start with "tvly-" followed by at least 28 alphanumeric characters',
     example: 'tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-    validate: (value: string) => value.length >= 32,
   },
   {
     name: 'SEARCH_PROVIDER',

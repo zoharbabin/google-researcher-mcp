@@ -181,6 +181,9 @@ export interface GoogleNewsSearchResponse {
 /**
  * A provider-agnostic search result that normalizes Google and Tavily responses
  * so both providers feed the same downstream formatters.
+ *
+ * TODO: Currently unused — the actual data contract is TextContent[] (URL-only).
+ * Reserved for a planned future refactor that surfaces titles/snippets downstream.
  */
 export interface NormalizedSearchResult {
   /** Result title */
