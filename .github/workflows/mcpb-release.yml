@@ -114,6 +114,7 @@ jobs:
         run: mcpb info google-researcher-mcp.mcpb
 
       - name: Unpack and validate
+        shell: bash
         run: |
           mcpb unpack google-researcher-mcp.mcpb unpacked
           ls -la unpacked/
