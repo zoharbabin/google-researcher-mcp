@@ -5,78 +5,57 @@ on:
   release:
     types: [published]
 
-env:
-  NODE_VERSION: '22'
-  REGISTRY_URL: 'https://registry.npmjs.org'
-
 permissions:
   attestations: write
   contents: read
-  id-token: write
+  id-token: write    # Required for npm OIDC trusted publisher
 
 jobs:
   publish-release:
     name: Publish Stable Release
     runs-on: ubuntu-latest
-    # Only run on actual release events (prevents spurious failures on push)
     if: github.event_name == 'release'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
-          
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '24'
           cache: 'npm'
-          registry-url: ${{ env.REGISTRY_URL }}
-          
+          registry-url: 'https://registry.npmjs.org'
+
       - name: Install dependencies
         run: npm ci
-        
-      - name: Run tests (unit tests already run in CI)
+
+      - name: Run tests
         run: npm run test:unit
         env:
           NODE_ENV: test
-          
+
       - name: Build package
         run: npm run build
-        
+
       - name: Validate release version
         id: version
         run: |
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           RELEASE_VERSION=${GITHUB_REF#refs/tags/v}
-          
+
           if [[ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]]; then
             echo "❌ Version mismatch: package.json ($PACKAGE_VERSION) != release tag ($RELEASE_VERSION)"
             exit 1
           fi
-          
+
           echo "version=${PACKAGE_VERSION}" >> $GITHUB_OUTPUT
           echo "✅ Version validation passed: $PACKAGE_VERSION"
-          
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          # Extract release notes from GitHub release
-          RELEASE_NOTES=$(echo '${{ github.event.release.body }}' | head -20)
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          
-      - name: Verify npm authentication
-        run: npm whoami --registry https://registry.npmjs.org/ || (echo "::error::NPM_TOKEN is invalid or expired. Create a Classic Automation token at https://www.npmjs.com/settings/tokens and update the NPM_TOKEN repo secret." && exit 1)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
-        run: npm publish --tag latest --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          
+        run: npm publish --tag latest
+
       - name: Create SLSA attestation
         uses: actions/attest-build-provenance@v1
         with:
@@ -84,14 +63,13 @@ jobs:
             dist/server.js
             dist/server.d.ts
             package.json
-          
+
       - name: Update GitHub release
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
             const release_id = context.payload.release.id;
-            const releaseNotes = `${{ steps.release_notes.outputs.notes }}`;
             const version = `${{ steps.version.outputs.version }}`;
             const repository = `${{ github.repository }}`;
 
@@ -108,13 +86,14 @@ jobs:
               `- [Changelog](https://github.com/${repository}/blob/main/docs/CHANGELOG.md)`
             ].join('\n');
 
+            const currentBody = context.payload.release.body || '';
             await github.rest.repos.updateRelease({
               owner,
               repo,
               release_id,
-              body: releaseNotes + installSection
+              body: currentBody + installSection
             });
-            
+
       - name: Create deployment summary
         run: |
           echo "## 🎉 Stable Release Published" >> $GITHUB_STEP_SUMMARY
