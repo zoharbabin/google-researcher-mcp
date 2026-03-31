@@ -162,6 +162,56 @@ export async function validateUrlForSSRF(
 }
 
 /**
+ * Maximum number of redirects to follow when using SSRF-safe fetch.
+ */
+const MAX_REDIRECTS = 10;
+
+/**
+ * Performs a fetch with SSRF validation on every redirect hop.
+ *
+ * Node's native fetch follows redirects transparently, bypassing the
+ * initial SSRF check. This wrapper uses `redirect: 'manual'` and
+ * validates each Location header before following.
+ *
+ * @param url - The initial URL to fetch
+ * @param options - SSRF validation options
+ * @param fetchInit - Additional fetch options (signal, headers, etc.)
+ * @returns The final Response after all validated redirects
+ */
+export async function ssrfSafeFetch(
+  url: string,
+  options: SSRFValidationOptions = {},
+  fetchInit: RequestInit = {}
+): Promise<Response> {
+  let currentUrl = url;
+
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    await validateUrlForSSRF(currentUrl, options);
+
+    const response = await fetch(currentUrl, {
+      ...fetchInit,
+      redirect: 'manual',
+    });
+
+    // Not a redirect — return the response
+    if (response.status < 300 || response.status >= 400) {
+      return response;
+    }
+
+    // Extract and validate redirect location
+    const location = response.headers.get('Location');
+    if (!location) {
+      return response; // No Location header — treat as final response
+    }
+
+    // Resolve relative redirects against the current URL
+    currentUrl = new URL(location, currentUrl).toString();
+  }
+
+  throw new SSRFProtectionError(url, `Too many redirects (>${MAX_REDIRECTS})`);
+}
+
+/**
  * Builds SSRFValidationOptions from environment variables.
  *
  * Reads:

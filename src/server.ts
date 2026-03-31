@@ -719,6 +719,28 @@ function configureToolsAndResources(
             storageClientOptions: { localDataDirectory: playwrightStorageDir },
         });
         const crawler = new PlaywrightCrawler({
+            preNavigationHooks: [
+                async ({ page }) => {
+                    // SSRF protection: intercept all requests (including redirects)
+                    // and validate each URL before the browser navigates to it
+                    await page.route('**/*', async (route) => {
+                        const requestUrl = route.request().url();
+                        try {
+                            await validateUrlForSSRF(requestUrl, SSRF_OPTIONS);
+                            await route.continue();
+                        } catch (error) {
+                            if (error instanceof SSRFProtectionError) {
+                                logger.warn('Playwright request blocked by SSRF protection', {
+                                    url: sanitizeUrl(requestUrl),
+                                });
+                                await route.abort('blockedbyclient');
+                            } else {
+                                await route.continue();
+                            }
+                        }
+                    });
+                },
+            ],
             requestHandler: async ({ page }) => {
                 // Wait for initial load
                 await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
@@ -2276,6 +2298,19 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   await httpServer.connect(httpTransportInstance);
   logger.info('HTTP transport connected to MCP server');
 
+  // Apply OAuth middleware to the core MCP transport endpoint when configured.
+  // Only the JSON-RPC transport routes (POST/GET/DELETE /mcp) require auth.
+  // Sub-paths like /mcp/oauth-config and /mcp/cache-stats remain public.
+  const requireAuth = oauthMiddleware
+    ? (req: Request, res: Response, next: NextFunction): void => {
+        oauthMiddleware!(req, res, next);
+      }
+    : undefined;
+
+  if (requireAuth) {
+    logger.info('OAuth middleware will be applied to /mcp transport endpoint');
+  }
+
   // Middleware to handle content negotiation for JSON-RPC requests
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.path === '/mcp' && req.method === 'POST') {
@@ -2298,8 +2333,10 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
     return Array.isArray(body);
   }
 
-  // Handle POST requests to /mcp
-  app.post("/mcp", async (req: Request, res: Response, next: NextFunction) => {
+  // Handle POST requests to /mcp (auth-protected when OAuth is configured)
+  const mcpMiddleware: Array<(req: Request, res: Response, next: NextFunction) => void> = [];
+  if (requireAuth) mcpMiddleware.push(requireAuth);
+  app.post("/mcp", ...mcpMiddleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Check if this is a batch request
       const isBatch = isBatchRequest(req.body);
@@ -2345,8 +2382,8 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
     }
   };
 
-  app.get("/mcp", handleSessionRequest);
-  app.delete("/mcp", handleSessionRequest);
+  app.get("/mcp", ...mcpMiddleware, handleSessionRequest);
+  app.delete("/mcp", ...mcpMiddleware, handleSessionRequest);
 
 // ─── 4️⃣ EVENT STORE & CACHE MANAGEMENT API ENDPOINTS ────────────────────────────
 /**
