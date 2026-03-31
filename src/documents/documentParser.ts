@@ -17,7 +17,7 @@ import {
   DEFAULT_TIMEOUT,
 } from './types.js';
 import { logger } from '../shared/logger.js';
-import { validateUrlForSSRF, SSRFProtectionError } from '../shared/urlValidator.js';
+import { ssrfSafeFetch, SSRFProtectionError } from '../shared/urlValidator.js';
 
 // ── Type Detection ─────────────────────────────────────────────────────────
 
@@ -85,10 +85,8 @@ async function fetchDocument(
   const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
 
-  // SSRF protection: validate URL before fetching
-  await validateUrlForSSRF(url);
-
-  const response = await fetch(url, {
+  // SSRF protection: validate URL and every redirect hop
+  const response = await ssrfSafeFetch(url, {}, {
     signal: AbortSignal.timeout(timeout),
     headers: {
       'User-Agent': 'Mozilla/5.0 (compatible; DocumentParser/1.0)',

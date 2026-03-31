@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { validateUrlForSSRF, SSRFProtectionError, getSSRFOptionsFromEnv } from './urlValidator.js';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { validateUrlForSSRF, SSRFProtectionError, getSSRFOptionsFromEnv, ssrfSafeFetch } from './urlValidator.js';
 
 describe('SSRF URL Validator', () => {
   describe('Protocol validation', () => {
@@ -225,6 +225,154 @@ describe('SSRF URL Validator', () => {
     it('should return undefined for whitespace-only ALLOWED_DOMAINS', () => {
       process.env.ALLOWED_DOMAINS = '   ';
       expect(getSSRFOptionsFromEnv().allowedDomains).toBeUndefined();
+    });
+  });
+
+  describe('ssrfSafeFetch', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('should fetch a URL that returns 200 directly', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockResolvedValue(
+        new Response('OK', { status: 200 })
+      );
+
+      const response = await ssrfSafeFetch('https://example.com/page');
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('OK');
+    });
+
+    it('should follow redirects and validate each hop', async () => {
+      let callCount = 0;
+      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return new Response('', {
+            status: 302,
+            headers: { Location: 'https://example.com/final' },
+          });
+        }
+        return new Response('Final', { status: 200 });
+      });
+
+      const response = await ssrfSafeFetch('https://example.com/start');
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('Final');
+      expect(callCount).toBe(2);
+    });
+
+    it('should block redirect to private IP', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockResolvedValue(
+        new Response('', {
+          status: 302,
+          headers: { Location: 'http://169.254.169.254/latest/meta-data/' },
+        })
+      );
+
+      await expect(
+        ssrfSafeFetch('https://example.com/redirect')
+      ).rejects.toThrow(SSRFProtectionError);
+    });
+
+    it('should block redirect to localhost', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockResolvedValue(
+        new Response('', {
+          status: 302,
+          headers: { Location: 'http://127.0.0.1:8080/admin' },
+        })
+      );
+
+      await expect(
+        ssrfSafeFetch('https://example.com/redirect')
+      ).rejects.toThrow(SSRFProtectionError);
+    });
+
+    it('should block redirect to internal network', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockResolvedValue(
+        new Response('', {
+          status: 302,
+          headers: { Location: 'http://10.0.0.1/internal' },
+        })
+      );
+
+      await expect(
+        ssrfSafeFetch('https://example.com/redirect')
+      ).rejects.toThrow(SSRFProtectionError);
+    });
+
+    it('should throw on too many redirects', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockResolvedValue(
+        new Response('', {
+          status: 302,
+          headers: { Location: 'https://example.com/loop' },
+        })
+      );
+
+      await expect(
+        ssrfSafeFetch('https://example.com/loop')
+      ).rejects.toThrow(/Too many redirects/);
+    });
+
+    it('should handle redirect with no Location header', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockResolvedValue(
+        new Response('No Location', { status: 302 })
+      );
+
+      const response = await ssrfSafeFetch('https://example.com/no-location');
+      expect(response.status).toBe(302);
+    });
+
+    it('should resolve relative redirect URLs', async () => {
+      let callCount = 0;
+      const urls: string[] = [];
+      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (input) => {
+        urls.push(typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as any).url);
+        callCount++;
+        if (callCount === 1) {
+          return new Response('', {
+            status: 301,
+            headers: { Location: '/other-path' },
+          });
+        }
+        return new Response('Done', { status: 200 });
+      });
+
+      const response = await ssrfSafeFetch('https://example.com/start');
+      expect(response.status).toBe(200);
+      expect(urls[1]).toBe('https://example.com/other-path');
+    });
+
+    it('should pass fetchInit options through to fetch', async () => {
+      const mockFetch = jest.fn<typeof fetch>().mockResolvedValue(
+        new Response('OK', { status: 200 })
+      );
+      globalThis.fetch = mockFetch;
+
+      await ssrfSafeFetch('https://example.com/page', {}, {
+        headers: { 'User-Agent': 'TestBot/1.0' },
+      });
+
+      const callArgs = mockFetch.mock.calls[0];
+      expect((callArgs[1] as any).redirect).toBe('manual');
+      expect((callArgs[1] as any).headers['User-Agent']).toBe('TestBot/1.0');
+    });
+
+    it('should respect SSRF options allowing private IPs', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async () => {
+        return new Response('', {
+          status: 302,
+          headers: { Location: 'http://127.0.0.1:8080/internal' },
+        });
+      });
+
+      // With allowPrivateIPs, redirect to 127.0.0.1 should be followed (not blocked)
+      // It will keep redirecting, so it'll hit the max redirect limit
+      await expect(
+        ssrfSafeFetch('https://example.com/redirect', { allowPrivateIPs: true })
+      ).rejects.toThrow(/Too many redirects/);
     });
   });
 });
