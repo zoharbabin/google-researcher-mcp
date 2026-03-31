@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: ✅ CI
 
 on:
   push:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   test:
-    name: Test Suite
+    name: 🧪 Test · Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -22,35 +22,35 @@ jobs:
       max-parallel: 2
 
     steps:
-    - name: Checkout code
+    - name: 📥 Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Node.js ${{ matrix.node-version }}
+    - name: 🟢 Setup Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
 
-    - name: Install dependencies
+    - name: 📦 Install dependencies
       run: npm ci
 
-    - name: Build project
+    - name: 🔨 Build
       run: npm run build
 
-    - name: Run unit tests
+    - name: 🧪 Unit tests
       run: npm run test:unit
       env:
         NODE_ENV: test
         CI: true
 
-    - name: Run unit tests with coverage
+    - name: 📊 Unit tests with coverage
       run: npm run test:coverage
       timeout-minutes: 15
       env:
         NODE_ENV: test
         CI: true
 
-    - name: Run integration tests
+    - name: 🔗 Integration tests
       run: timeout 10m npm run test:integration
       timeout-minutes: 12
       env:
@@ -59,7 +59,7 @@ jobs:
         GOOGLE_CUSTOM_SEARCH_API_KEY: ${{ secrets.GOOGLE_CUSTOM_SEARCH_API_KEY }}
         GOOGLE_CUSTOM_SEARCH_ID: ${{ secrets.GOOGLE_CUSTOM_SEARCH_ID }}
 
-    - name: Run E2E tests (stdio)
+    - name: 🔌 E2E tests (STDIO)
       run: timeout 5m npm run test:e2e:stdio
       timeout-minutes: 7
       env:
@@ -68,7 +68,7 @@ jobs:
         GOOGLE_CUSTOM_SEARCH_API_KEY: ${{ secrets.GOOGLE_CUSTOM_SEARCH_API_KEY }}
         GOOGLE_CUSTOM_SEARCH_ID: ${{ secrets.GOOGLE_CUSTOM_SEARCH_ID }}
 
-    - name: Run E2E tests (sse)
+    - name: 🌐 E2E tests (SSE)
       run: timeout 5m npm run test:e2e:sse
       timeout-minutes: 7
       env:
@@ -77,14 +77,14 @@ jobs:
         GOOGLE_CUSTOM_SEARCH_API_KEY: ${{ secrets.GOOGLE_CUSTOM_SEARCH_API_KEY }}
         GOOGLE_CUSTOM_SEARCH_ID: ${{ secrets.GOOGLE_CUSTOM_SEARCH_ID }}
 
-    - name: Run YouTube transcript E2E tests
+    - name: 🎬 E2E tests (YouTube)
       run: timeout 5m npm run test:e2e:youtube
       timeout-minutes: 7
       env:
         NODE_ENV: test
         CI: true
 
-    - name: Upload coverage reports
+    - name: 📤 Upload coverage
       if: matrix.node-version == '20.x'
       uses: codecov/codecov-action@v4
       with:
@@ -93,7 +93,7 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
-    - name: Archive test results
+    - name: 💾 Archive test results
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -104,35 +104,35 @@ jobs:
         retention-days: 14
 
   lint:
-    name: Lint and Format Check
+    name: 📝 Lint & Types
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
+    - name: 📥 Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Node.js
+    - name: 🟢 Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
         cache: 'npm'
 
-    - name: Install dependencies
+    - name: 📦 Install dependencies
       run: npm ci
 
-    - name: Check TypeScript compilation
+    - name: 🔨 Build TypeScript
       run: npm run build
 
-    - name: Verify no TypeScript errors
+    - name: 🔎 Type check
       run: npx tsc --noEmit
 
-    - name: Verify shebang in dist/server.js
+    - name: ✅ Verify shebang
       run: |
         head -1 dist/server.js | grep -q '^#!/usr/bin/env node' \
           && echo "✅ Shebang present in dist/server.js" \
           || (echo "❌ Missing shebang in dist/server.js" && exit 1)
 
-    - name: Verify bin field in package.json
+    - name: ✅ Verify bin field
       run: |
         node -e "
           const pkg = require('./package.json');
@@ -144,23 +144,23 @@ jobs:
         "
 
   security:
-    name: Security Audit
+    name: 🔒 Security Audit
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
+    - name: 📥 Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Node.js
+    - name: 🟢 Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
         cache: 'npm'
 
-    - name: Install dependencies
+    - name: 📦 Install dependencies
       run: npm ci
 
-    - name: Run security audit
+    - name: 🔍 Audit dependencies
       run: |
         echo "## Security Audit Results" >> $GITHUB_STEP_SUMMARY
         if npm audit --audit-level=high 2>&1; then
@@ -174,33 +174,33 @@ jobs:
         fi
 
   performance:
-    name: Performance Tests
+    name: ⚡ Performance
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [test]
 
     steps:
-    - name: Checkout code
+    - name: 📥 Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Node.js
+    - name: 🟢 Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
         cache: 'npm'
 
-    - name: Install dependencies
+    - name: 📦 Install dependencies
       run: npm ci
 
-    - name: Build project
+    - name: 🔨 Build
       run: npm run build
 
-    - name: Run performance-focused tests
+    - name: ⏱️ Performance tests
       run: npm test -- --testNamePattern="performance|timeout|speed"
       env:
         NODE_ENV: test
 
-    - name: Run timeout tests
+    - name: ⏱️ Timeout tests
       run: timeout 8m npm run test:e2e:timeout
       env:
         NODE_ENV: test
@@ -208,21 +208,19 @@ jobs:
         GOOGLE_CUSTOM_SEARCH_ID: ${{ secrets.GOOGLE_CUSTOM_SEARCH_ID }}
 
   docker:
-    name: Docker Build
+    name: 🐳 Docker Build
     runs-on: ubuntu-latest
     needs: [lint]
 
     steps:
-    - name: Checkout code
+    - name: 📥 Checkout
       uses: actions/checkout@v4
 
-    - name: Build Docker image
+    - name: 🐳 Build image
       run: docker build -t google-researcher-mcp:ci .
 
-    - name: Verify Docker image runs
+    - name: ✅ Verify image runs
       run: |
-        # Run with --help-like check — the server will exit quickly without API keys
-        # but we verify the image boots and Node.js runs correctly
         docker run --rm google-researcher-mcp:ci node -e "
           const pkg = require('./package.json');
           console.log('Package:', pkg.name, pkg.version);
@@ -235,7 +233,7 @@ jobs:
           console.log('✅ Docker image verified');
         "
 
-    - name: Verify non-root user
+    - name: 🔒 Verify non-root user
       run: |
         USER=$(docker run --rm google-researcher-mcp:ci whoami)
         if [ "$USER" != "mcp" ]; then
@@ -244,40 +242,40 @@ jobs:
         fi
         echo "✅ Container runs as non-root user: $USER"
 
-    - name: Check image size
+    - name: 📏 Check image size
       run: |
         SIZE=$(docker image inspect google-researcher-mcp:ci --format='{{.Size}}')
         SIZE_MB=$((SIZE / 1024 / 1024))
         echo "Docker image size: ${SIZE_MB}MB"
-        echo "## Docker Build" >> $GITHUB_STEP_SUMMARY
+        echo "## 🐳 Docker Build" >> $GITHUB_STEP_SUMMARY
         echo "✅ Image built successfully (${SIZE_MB}MB)" >> $GITHUB_STEP_SUMMARY
 
   publish-ready:
-    name: Verify Publish Readiness
+    name: 📋 Publish Readiness
     runs-on: ubuntu-latest
     needs: [test, lint, security, docker]
     if: github.ref == 'refs/heads/main'
 
     steps:
-    - name: Checkout code
+    - name: 📥 Checkout
       uses: actions/checkout@v4
 
-    - name: Setup Node.js
+    - name: 🟢 Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
         cache: 'npm'
 
-    - name: Install dependencies
+    - name: 📦 Install dependencies
       run: npm ci
 
-    - name: Test prepublish script
+    - name: 🧪 Test prepublish
       run: npm run prepublishOnly
 
-    - name: Verify package contents
+    - name: 📦 Verify package contents
       run: npm pack --dry-run
 
-    - name: Check package size
+    - name: 📏 Check package size
       run: |
         SIZE_OUTPUT=$(npm pack --dry-run 2>&1 | tail -1)
         echo "Package info: ${SIZE_OUTPUT}"

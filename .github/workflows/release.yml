@@ -1,5 +1,4 @@
-# Publish stable releases to npm when a GitHub Release is created
-name: Release
+name: 📦 Publish · npm
 
 on:
   release:
@@ -12,34 +11,34 @@ permissions:
 
 jobs:
   publish-release:
-    name: Publish Stable Release
+    name: 🚀 Build, Test & Publish
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
 
-      - name: Setup Node.js
+      - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: 'npm'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: npm ci
 
-      - name: Run tests
+      - name: 🧪 Run tests
         run: npm run test:unit
         env:
           NODE_ENV: test
 
-      - name: Build package
+      - name: 🔨 Build
         run: npm run build
 
-      - name: Validate release version
+      - name: 🔍 Validate version
         id: version
         run: |
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
@@ -53,10 +52,10 @@ jobs:
           echo "version=${PACKAGE_VERSION}" >> $GITHUB_OUTPUT
           echo "✅ Version validation passed: $PACKAGE_VERSION"
 
-      - name: Publish to npm
+      - name: 📦 Publish to npm
         run: npm publish --tag latest
 
-      - name: Create SLSA attestation
+      - name: 🔏 Create SLSA attestation
         uses: actions/attest-build-provenance@v1
         with:
           subject-path: |
@@ -64,7 +63,7 @@ jobs:
             dist/server.d.ts
             package.json
 
-      - name: Update GitHub release
+      - name: 📝 Update release notes
         uses: actions/github-script@v7
         with:
           script: |
@@ -94,9 +93,9 @@ jobs:
               body: currentBody + installSection
             });
 
-      - name: Create deployment summary
+      - name: 📋 Summary
         run: |
-          echo "## 🎉 Stable Release Published" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Stable Release Published" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Install**: \`npm install google-researcher-mcp@latest\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Release**: [${{ github.event.release.name }}](${{ github.event.release.html_url }})" >> $GITHUB_STEP_SUMMARY

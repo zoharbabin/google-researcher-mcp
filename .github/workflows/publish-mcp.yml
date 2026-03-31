@@ -1,31 +1,32 @@
-name: Publish to MCP Registry
+name: 🌐 Publish · MCP Registry
 
 on:
   workflow_run:
-    workflows: ["Release"]
+    workflows: ["📦 Publish · npm"]
     types: [completed]
 
 jobs:
   publish:
+    name: 📡 Publish to Registry
     runs-on: ubuntu-latest
-    # Only run if the Release workflow succeeded
     if: github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
       id-token: write    # Required for GitHub OIDC authentication
     steps:
-      - uses: actions/checkout@v4
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
 
-      - name: Get version from package.json
+      - name: 🏷️ Get version
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
-      - name: Set version in server.json
+      - name: 🏷️ Sync server.json version
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           jq --arg v "$VERSION" '.version = $v' server.json > server.tmp && mv server.tmp server.json
@@ -33,28 +34,28 @@ jobs:
           echo "Updated server.json to version $VERSION"
           cat server.json
 
-      - name: Wait for npm package availability
+      - name: ⏳ Wait for npm availability
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           echo "Waiting for google-researcher-mcp@${VERSION} on npm..."
           for i in $(seq 1 30); do
             if npm view "google-researcher-mcp@${VERSION}" version 2>/dev/null; then
-              echo "Package available on npm!"
+              echo "✅ Package available on npm!"
               exit 0
             fi
-            echo "Attempt $i/30 - not yet available, waiting 10s..."
+            echo "Attempt $i/30 — not yet available, waiting 10s..."
             sleep 10
           done
-          echo "Package not found on npm after 5 minutes"
+          echo "❌ Package not found on npm after 5 minutes"
           exit 1
 
-      - name: Install mcp-publisher
+      - name: 🔧 Install mcp-publisher
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
           chmod +x mcp-publisher
 
-      - name: Authenticate to MCP Registry
+      - name: 🔑 Authenticate (GitHub OIDC)
         run: ./mcp-publisher login github-oidc
 
-      - name: Publish to MCP Registry
+      - name: 🌐 Publish to MCP Registry
         run: ./mcp-publisher publish

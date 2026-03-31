@@ -1,4 +1,4 @@
-name: Monitor Package Health
+name: 💚 Health Check
 
 on:
   schedule:
@@ -10,15 +10,15 @@ env:
 
 jobs:
   check-npm-sync:
-    name: Check npm Package Health
+    name: 🏥 Package Health
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Node.js
+      - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Check package versions
+      - name: 🏷️ Check versions
         id: versions
         run: |
           # Get latest npm version
@@ -30,10 +30,10 @@ jobs:
           echo "github_version=${GITHUB_VERSION}" >> $GITHUB_OUTPUT
 
           echo "📊 Version Check:"
-          echo "- npm latest: ${NPM_VERSION}"
-          echo "- GitHub latest: ${GITHUB_VERSION}"
+          echo "  npm latest:    ${NPM_VERSION}"
+          echo "  GitHub latest: ${GITHUB_VERSION}"
 
-      - name: Test package installation
+      - name: 📦 Test installation
         run: |
           echo "🧪 Testing package installation..."
           mkdir -p test-install
@@ -47,9 +47,9 @@ jobs:
               try {
                 const pkg = require('google-researcher-mcp/package.json');
                 console.log('✅ Package metadata accessible');
-                console.log('- Name:', pkg.name);
-                console.log('- Version:', pkg.version);
-                console.log('- Main:', pkg.main);
+                console.log('  Name:', pkg.name);
+                console.log('  Version:', pkg.version);
+                console.log('  Main:', pkg.main);
               } catch (e) {
                 console.error('❌ Package metadata check failed:', e.message);
                 process.exit(1);
@@ -68,7 +68,7 @@ jobs:
           cd ..
           rm -rf test-install
 
-      - name: Check package size
+      - name: 📏 Check package size
         run: |
           echo "📦 Checking package size..."
           PACKAGE_INFO=$(npm view google-researcher-mcp --json 2>/dev/null || echo "{}")
@@ -84,7 +84,7 @@ jobs:
               else printf "%d B", $1;
             }')
 
-            echo "- Unpacked size: ${FORMATTED_SIZE}"
+            echo "  Unpacked size: ${FORMATTED_SIZE}"
 
             if [[ $UNPACKED_SIZE -gt 52428800 ]]; then
               echo "⚠️ Package size exceeds 50MB limit"
@@ -93,7 +93,7 @@ jobs:
             fi
           fi
 
-      - name: Check dependencies health
+      - name: 🔒 Check dependencies health
         run: |
           echo "🔍 Checking dependencies health..."
           mkdir -p health-check && cd health-check
@@ -104,8 +104,8 @@ jobs:
             CRITICAL_VULNS=$(jq '.metadata.vulnerabilities.critical // 0' audit.json 2>/dev/null || echo "0")
             HIGH_VULNS=$(jq '.metadata.vulnerabilities.high // 0' audit.json 2>/dev/null || echo "0")
 
-            echo "- Critical severity: $CRITICAL_VULNS"
-            echo "- High severity: $HIGH_VULNS"
+            echo "  Critical: $CRITICAL_VULNS"
+            echo "  High:     $HIGH_VULNS"
 
             if [[ "$CRITICAL_VULNS" -gt 0 ]]; then
               echo "❌ Critical vulnerabilities found"
@@ -113,7 +113,7 @@ jobs:
               cd .. && rm -rf health-check
               exit 1
             else
-              echo "✅ No critical vulnerabilities found"
+              echo "✅ No critical vulnerabilities"
             fi
           else
             echo "⚠️ Could not run security audit (non-critical)"
@@ -121,10 +121,10 @@ jobs:
 
           cd .. && rm -rf health-check
 
-      - name: Create health report
+      - name: 📋 Health report
         if: always()
         run: |
-          echo "## 📊 Package Health Report" >> $GITHUB_STEP_SUMMARY
+          echo "## 💚 Package Health Report" >> $GITHUB_STEP_SUMMARY
           echo "**Generated**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -143,7 +143,7 @@ jobs:
           echo "- [npm package](https://www.npmjs.com/package/google-researcher-mcp)" >> $GITHUB_STEP_SUMMARY
           echo "- [GitHub releases](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
 
-      - name: Report critical issues
+      - name: 🚨 Report critical issues
         if: failure()
         uses: actions/github-script@v7
         with:
