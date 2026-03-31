@@ -9,32 +9,25 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      id-token: write    # Required for GitHub OIDC authentication
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version in server.json
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          jq --arg v "$VERSION" '.version = $v' server.json > server.tmp && mv server.tmp server.json
+          jq --arg v "$VERSION" '.packages[0].version = $v' server.json > server.tmp && mv server.tmp server.json
+          echo "Updated server.json to version $VERSION"
+          cat server.json
+
       - name: Install mcp-publisher
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz
-          sudo mv mcp-publisher /usr/local/bin/
-          echo "Available login methods:"
-          mcp-publisher login --help 2>&1 || mcp-publisher login 2>&1 || true
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          chmod +x mcp-publisher
 
-      - name: Authenticate and Publish to MCP Registry
-        run: |
-          # Try OIDC auth first (GitHub Actions native), fall back to token-based
-          if mcp-publisher login oidc 2>/dev/null; then
-            echo "Authenticated via OIDC"
-          elif mcp-publisher login github 2>/dev/null; then
-            echo "Authenticated via GitHub"
-          elif mcp-publisher login token 2>/dev/null; then
-            echo "Authenticated via token"
-          else
-            echo "::warning::Could not authenticate with MCP Registry. Check mcp-publisher login methods."
-            echo "Available methods:"
-            mcp-publisher login 2>&1 || true
-            exit 1
-          fi
-          mcp-publisher publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish

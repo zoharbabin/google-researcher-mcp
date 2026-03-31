@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.zoharbabin/google-researcher",
   "description": "MCP server providing Google Search, web scraping, and multi-source research tools for AI assistants",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "repository": {
     "url": "https://github.com/zoharbabin/google-researcher-mcp",
     "source": "github"
@@ -11,7 +11,7 @@
     {
       "registryType": "npm",
       "identifier": "google-researcher-mcp",
-      "version": "6.0.0",
+      "version": "6.0.1",
       "runtimeHint": "node",
       "transport": {
         "type": "stdio"
