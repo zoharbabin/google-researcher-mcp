@@ -13,6 +13,14 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { YoutubeTranscript } = require("@danielxceron/youtube-transcript");
 
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const execFile = promisify(execFileCb);
+
 // Interface for transcript fetcher to allow dependency injection
 export interface TranscriptFetcher {
   fetchTranscript(videoId: string): Promise<Array<{ text: string }>>;
@@ -25,6 +33,72 @@ export const defaultTranscriptFetcher: TranscriptFetcher = {
     return await YoutubeTranscript.fetchTranscript(videoId);
   }
 };
+
+// Interface for yt-dlp fallback to allow dependency injection in tests
+export interface YtDlpFallback {
+  isAvailable(): Promise<boolean>;
+  extractTranscript(videoId: string): Promise<string>;
+}
+
+/**
+ * Default yt-dlp fallback implementation.
+ * Uses the yt-dlp CLI to download auto-generated subtitles in JSON3 format,
+ * then parses them into plain text. This works around YouTube API changes
+ * (e.g. the exp=xpe experiment) that break library-based extraction.
+ */
+export class DefaultYtDlpFallback implements YtDlpFallback {
+  private available: boolean | null = null;
+
+  async isAvailable(): Promise<boolean> {
+    if (this.available !== null) return this.available;
+    try {
+      await execFile('yt-dlp', ['--version'], { timeout: 5000 });
+      this.available = true;
+    } catch {
+      this.available = false;
+    }
+    return this.available;
+  }
+
+  async extractTranscript(videoId: string): Promise<string> {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'yt-transcript-'));
+    const outTemplate = join(tmpDir, 'sub');
+
+    try {
+      await execFile('yt-dlp', [
+        '--write-auto-sub',
+        '--sub-lang', 'en',
+        '--sub-format', 'json3',
+        '--skip-download',
+        '--no-warnings',
+        '--no-check-certificates',
+        '-o', outTemplate,
+        `https://www.youtube.com/watch?v=${videoId}`,
+      ], { timeout: 30000 });
+
+      // yt-dlp writes to <outTemplate>.en.json3
+      const filePath = `${outTemplate}.en.json3`;
+      const raw = await readFile(filePath, 'utf-8');
+      const data = JSON.parse(raw);
+
+      const events: Array<{ segs?: Array<{ utf8?: string }> }> = data.events || [];
+      const text = events
+        .filter(e => e.segs)
+        .map(e => (e.segs ?? []).map(s => s.utf8 ?? '').join(''))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!text) {
+        throw new Error('yt-dlp returned empty transcript content');
+      }
+
+      return text;
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
 
 /**
  * YouTube transcript error types for classification
@@ -350,16 +424,19 @@ export class RobustYouTubeTranscriptExtractor {
   private errorHandler: YouTubeTranscriptErrorHandler;
   private metrics: MetricsCollector;
   private transcriptFetcher: TranscriptFetcher;
+  private ytDlpFallback: YtDlpFallback;
 
   constructor(
     private retryConfig: RetryConfig = DEFAULT_RETRY_CONFIG,
     private logger: Logger = new ConsoleLogger(),
     metrics?: MetricsCollector,
-    transcriptFetcher?: TranscriptFetcher
+    transcriptFetcher?: TranscriptFetcher,
+    ytDlpFallback?: YtDlpFallback
   ) {
     this.errorHandler = new YouTubeTranscriptErrorHandler(retryConfig, logger);
     this.metrics = metrics || new SimpleMetricsCollector();
     this.transcriptFetcher = transcriptFetcher || defaultTranscriptFetcher;
+    this.ytDlpFallback = ytDlpFallback || new DefaultYtDlpFallback();
   }
 
   /**
@@ -425,15 +502,50 @@ export class RobustYouTubeTranscriptExtractor {
       }
     }
 
-    // All attempts failed
-    const errorType = this.errorHandler.classifyError(lastError!, videoId);
-    const userMessage = this.errorHandler.formatUserError(errorType, videoId, lastError!);
+    // All library attempts failed — try yt-dlp fallback
+    const libraryErrorType = this.errorHandler.classifyError(lastError!, videoId);
+
+    this.logger.info(`Library extraction failed for video ${videoId}, attempting yt-dlp fallback`, {
+      libraryError: libraryErrorType,
+      libraryAttempts: actualAttempts
+    });
+
+    try {
+      if (await this.ytDlpFallback.isAvailable()) {
+        const transcript = await this.ytDlpFallback.extractTranscript(videoId);
+
+        const duration = Date.now() - startTime;
+        this.metrics.recordSuccess(videoId, actualAttempts + 1, duration);
+
+        this.logger.info(`yt-dlp fallback succeeded for video ${videoId}`, {
+          duration,
+          transcriptLength: transcript.length
+        });
+
+        return {
+          success: true,
+          transcript,
+          videoId,
+          attempts: actualAttempts + 1,
+          duration
+        };
+      } else {
+        this.logger.warn('yt-dlp not available on system, skipping fallback');
+      }
+    } catch (ytDlpError) {
+      this.logger.warn(`yt-dlp fallback also failed for video ${videoId}`, {
+        error: (ytDlpError as Error).message
+      });
+    }
+
+    // Both library and yt-dlp failed
+    const userMessage = this.errorHandler.formatUserError(libraryErrorType, videoId, lastError!);
     const duration = Date.now() - startTime;
 
-    this.metrics.recordFailure(videoId, actualAttempts, errorType, duration);
+    this.metrics.recordFailure(videoId, actualAttempts, libraryErrorType, duration);
 
-    this.logger.error(`Failed to extract transcript for video ${videoId} after ${actualAttempts} attempts`, {
-      errorType,
+    this.logger.error(`Failed to extract transcript for video ${videoId} after ${actualAttempts} library attempts and yt-dlp fallback`, {
+      errorType: libraryErrorType,
       duration,
       originalError: lastError!.message
     });
@@ -444,7 +556,7 @@ export class RobustYouTubeTranscriptExtractor {
       attempts: actualAttempts,
       duration,
       error: {
-        type: errorType,
+        type: libraryErrorType,
         message: userMessage,
         originalError: lastError!.message,
         videoId,

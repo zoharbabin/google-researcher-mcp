@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "google-researcher-mcp",
   "display_name": "Google Researcher MCP",
-  "version": "6.0.2",
+  "version": "6.0.3",
   "description": "MCP server providing Google Search, web scraping, and multi-source research tools for AI assistants",
   "long_description": "A comprehensive MCP server that enables AI assistants to search the web, scrape content, and conduct multi-source research.\n\n**Features:**\n- Google Custom Search with advanced filtering (time range, site, language)\n- Web page scraping with JavaScript rendering via Playwright\n- YouTube transcript extraction with language support\n- Document parsing (PDF, DOCX, PPTX) with text extraction\n- Academic paper search across arXiv, PubMed, IEEE, Nature, Springer\n- Patent search via Google Patents with prior art analysis\n- Multi-step research tracking for complex investigations\n- Smart caching (30min search, 1hr content) and rate limiting\n- Content deduplication and quality scoring",
   "author": {

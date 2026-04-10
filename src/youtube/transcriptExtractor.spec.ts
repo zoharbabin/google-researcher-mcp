@@ -10,13 +10,20 @@ import {
   type RetryConfig,
   type Logger,
   type MetricsCollector,
-  type TranscriptFetcher
+  type TranscriptFetcher,
+  type YtDlpFallback
 } from './transcriptExtractor.js';
 
 // Create a mock transcript fetcher using dependency injection
 const mockFetchTranscript = jest.fn() as jest.MockedFunction<(videoId: string) => Promise<any>>;
 const mockTranscriptFetcher: TranscriptFetcher = {
   fetchTranscript: mockFetchTranscript
+};
+
+// Disabled yt-dlp fallback for unit tests (so real yt-dlp on the system doesn't interfere)
+const disabledYtDlpFallback: YtDlpFallback = {
+  isAvailable: async () => false,
+  extractTranscript: async () => { throw new Error('yt-dlp not available'); }
 };
 
 describe('YouTubeTranscriptErrorHandler', () => {
@@ -331,7 +338,8 @@ describe('RobustYouTubeTranscriptExtractor', () => {
       testRetryConfig,
       mockLogger,
       mockMetrics,
-      mockTranscriptFetcher
+      mockTranscriptFetcher,
+      disabledYtDlpFallback
     );
 
     // Reset all mocks
@@ -525,7 +533,8 @@ describe('RobustYouTubeTranscriptExtractor', () => {
         customConfig,
         mockLogger,
         mockMetrics,
-        mockTranscriptFetcher
+        mockTranscriptFetcher,
+        disabledYtDlpFallback
       );
       
       mockFetchTranscript.mockRejectedValue(
@@ -557,18 +566,160 @@ describe('Integration Tests', () => {
         ...DEFAULT_RETRY_CONFIG,
         baseDelay: 0, // No delay for test
         maxDelay: 0
-      }, undefined, undefined, mockTranscriptFetcher);
-      
+      }, undefined, undefined, mockTranscriptFetcher, disabledYtDlpFallback);
+
       mockFetchTranscript.mockRejectedValue(
         new Error('Transcript is disabled for this video')
       );
-      
+
       const result = await extractor.extractTranscript('dQw4w9WgXcQ');
-      
+
       expect(result.success).toBe(false);
       expect(result.error?.message).toContain('dQw4w9WgXcQ');
       expect(result.error?.message).toContain('disabled automatic captions');
       expect(result.error?.message.length).toBeGreaterThan(50);
     });
+  });
+});
+
+describe('yt-dlp Fallback', () => {
+  let mockLogger: jest.Mocked<Logger>;
+  let mockMetrics: jest.Mocked<MetricsCollector>;
+
+  const testRetryConfig: RetryConfig = {
+    maxAttempts: 1,
+    baseDelay: 0,
+    maxDelay: 0,
+    exponentialBase: 1,
+    retryableErrors: [],
+    jitterFactor: 0
+  };
+
+  beforeEach(() => {
+    jest.useRealTimers();
+    mockLogger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    };
+    mockMetrics = {
+      recordSuccess: jest.fn(),
+      recordFailure: jest.fn(),
+    };
+    jest.clearAllMocks();
+    mockFetchTranscript.mockClear();
+  });
+
+  it('should fall back to yt-dlp when library fails and yt-dlp is available', async () => {
+    const mockYtDlp: YtDlpFallback = {
+      isAvailable: async () => true,
+      extractTranscript: async () => 'Hello from yt-dlp transcript'
+    };
+
+    mockFetchTranscript.mockRejectedValue(new Error('Transcript is disabled on this video'));
+
+    const extractor = new RobustYouTubeTranscriptExtractor(
+      testRetryConfig, mockLogger, mockMetrics, mockTranscriptFetcher, mockYtDlp
+    );
+
+    const result = await extractor.extractTranscript('test123');
+
+    expect(result.success).toBe(true);
+    expect(result.transcript).toBe('Hello from yt-dlp transcript');
+    expect(mockMetrics.recordSuccess).toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining('yt-dlp fallback succeeded'),
+      expect.any(Object)
+    );
+  });
+
+  it('should skip yt-dlp when it is not available', async () => {
+    const mockYtDlp: YtDlpFallback = {
+      isAvailable: async () => false,
+      extractTranscript: async () => { throw new Error('should not be called'); }
+    };
+
+    mockFetchTranscript.mockRejectedValue(new Error('Transcript is disabled on this video'));
+
+    const extractor = new RobustYouTubeTranscriptExtractor(
+      testRetryConfig, mockLogger, mockMetrics, mockTranscriptFetcher, mockYtDlp
+    );
+
+    const result = await extractor.extractTranscript('test123');
+
+    expect(result.success).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith('yt-dlp not available on system, skipping fallback');
+  });
+
+  it('should return library error when yt-dlp also fails', async () => {
+    const mockYtDlp: YtDlpFallback = {
+      isAvailable: async () => true,
+      extractTranscript: async () => { throw new Error('yt-dlp process exited with code 1'); }
+    };
+
+    mockFetchTranscript.mockRejectedValue(new Error('Transcript is disabled on this video'));
+
+    const extractor = new RobustYouTubeTranscriptExtractor(
+      testRetryConfig, mockLogger, mockMetrics, mockTranscriptFetcher, mockYtDlp
+    );
+
+    const result = await extractor.extractTranscript('test123');
+
+    expect(result.success).toBe(false);
+    expect(result.error?.type).toBe(YouTubeTranscriptErrorType.TRANSCRIPT_DISABLED);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('yt-dlp fallback also failed'),
+      expect.any(Object)
+    );
+  });
+
+  it('should not attempt yt-dlp when library succeeds', async () => {
+    const ytDlpExtract = jest.fn() as jest.MockedFunction<(videoId: string) => Promise<string>>;
+    const mockYtDlp: YtDlpFallback = {
+      isAvailable: async () => true,
+      extractTranscript: ytDlpExtract,
+    };
+
+    mockFetchTranscript.mockResolvedValue([{ text: 'Library worked' }]);
+
+    const extractor = new RobustYouTubeTranscriptExtractor(
+      testRetryConfig, mockLogger, mockMetrics, mockTranscriptFetcher, mockYtDlp
+    );
+
+    const result = await extractor.extractTranscript('test123');
+
+    expect(result.success).toBe(true);
+    expect(result.transcript).toBe('Library worked');
+    expect(ytDlpExtract).not.toHaveBeenCalled();
+  });
+
+  it('should try yt-dlp after all library retries are exhausted', async () => {
+    const retryConfig: RetryConfig = {
+      maxAttempts: 3,
+      baseDelay: 0,
+      maxDelay: 0,
+      exponentialBase: 1,
+      retryableErrors: [YouTubeTranscriptErrorType.NETWORK_ERROR],
+      jitterFactor: 0
+    };
+
+    const mockYtDlp: YtDlpFallback = {
+      isAvailable: async () => true,
+      extractTranscript: async () => 'Recovered via yt-dlp'
+    };
+
+    mockFetchTranscript.mockRejectedValue(new Error('Network connection failed'));
+
+    const extractor = new RobustYouTubeTranscriptExtractor(
+      retryConfig, mockLogger, mockMetrics, mockTranscriptFetcher, mockYtDlp
+    );
+
+    const result = await extractor.extractTranscript('test123');
+
+    expect(result.success).toBe(true);
+    expect(result.transcript).toBe('Recovered via yt-dlp');
+    expect(mockFetchTranscript).toHaveBeenCalledTimes(3); // All retries exhausted first
+    expect(result.attempts).toBe(4); // 3 library + 1 yt-dlp
   });
 });

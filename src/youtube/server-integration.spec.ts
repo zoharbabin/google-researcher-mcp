@@ -1,10 +1,16 @@
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
-import { RobustYouTubeTranscriptExtractor, YouTubeTranscriptErrorType, TranscriptFetcher } from './transcriptExtractor.js';
+import { RobustYouTubeTranscriptExtractor, YouTubeTranscriptErrorType, TranscriptFetcher, YtDlpFallback } from './transcriptExtractor.js';
 
 // Create a mock transcript fetcher
 const mockFetchTranscript = jest.fn() as jest.MockedFunction<(videoId: string) => Promise<any>>;
 const mockTranscriptFetcher: TranscriptFetcher = {
   fetchTranscript: mockFetchTranscript
+};
+
+// Disabled yt-dlp fallback for unit tests
+const disabledYtDlpFallback: YtDlpFallback = {
+  isAvailable: async () => false,
+  extractTranscript: async () => { throw new Error('yt-dlp not available'); }
 };
 
 describe('YouTube Transcript Server Integration Tests', () => {
@@ -30,7 +36,7 @@ describe('YouTube Transcript Server Integration Tests', () => {
         YouTubeTranscriptErrorType.UNKNOWN
       ],
       jitterFactor: 0
-    }, undefined, undefined, mockTranscriptFetcher);
+    }, undefined, undefined, mockTranscriptFetcher, disabledYtDlpFallback);
 
     // Clear and reset all mocks
     jest.clearAllMocks();
