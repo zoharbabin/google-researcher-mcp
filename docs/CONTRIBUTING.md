@@ -26,7 +26,7 @@ All contributors are expected to adhere to our [Code of Conduct](./CODE_OF_CONDU
 | Report a bug | [Open a bug report](https://github.com/zoharbabin/google-researcher-mcp/issues/new?template=bug_report.yml) |
 | Request a feature | [Open a feature request](https://github.com/zoharbabin/google-researcher-mcp/issues/new?template=feature_request.yml) |
 | Report a security vulnerability | [Private vulnerability report](https://github.com/zoharbabin/google-researcher-mcp/security/advisories/new) (do **not** open a public issue) |
-| Ask a question | [GitHub Discussions](https://github.com/zoharbabin/google-researcher-mcp/discussions) |
+| Ask a question | [Open an issue](https://github.com/zoharbabin/google-researcher-mcp/issues) with your question |
 | Fix a bug or add a feature | Fork, branch, code, test, PR (see below) |
 | Improve documentation | Same workflow — documentation PRs are welcome |
 
