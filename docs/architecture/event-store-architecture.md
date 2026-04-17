@@ -92,7 +92,7 @@ const eventStoreInstance = new PersistentEventStore({
   eventTTL: 24 * 60 * 60 * 1000, // 24 hours
   maxEventsPerStream: 1000,
   persistenceInterval: 5 * 60 * 1000, // 5 minutes
-  eagerLoading: true, // Load all events from disk on startup
+  eagerLoading: false, // Events loaded on demand to reduce startup memory
 });
 ```
 

@@ -16,8 +16,7 @@
  * @see https://github.com/zoharbabin/google-researcher-mcp for MCP documentation
  */
 
-import express from "express";
-import cors from "cors";
+import type express from "express";
 import path from "node:path";
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -28,7 +27,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { PersistentEventStore } from "./shared/persistentEventStore.js";
 import { z } from "zod";
-import { CheerioCrawler, PlaywrightCrawler, Configuration, log as crawleeLog, LogLevel as CrawleeLogLevel } from "crawlee";
+import { CheerioCrawler } from "@crawlee/cheerio";
+import { Configuration, log as crawleeLog, LogLevel as CrawleeLogLevel } from "@crawlee/core";
 import { PersistentCache, HybridPersistenceStrategy } from "./cache/index.js";
 import { serveOAuthScopesDocumentation } from "./shared/oauthScopesDocumentation.js";
 import { createOAuthMiddleware, OAuthMiddlewareOptions } from "./shared/oauthMiddleware.js";
@@ -60,7 +60,7 @@ import {
 } from "./shared/citationExtractor.js";
 import { CircuitBreaker, CircuitOpenError } from "./shared/circuitBreaker.js";
 import { mapWithConcurrency } from "./shared/concurrency.js";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import type rateLimit from "express-rate-limit";
 import { validateEnvironmentOrExit, getValidatedEnvValue } from "./shared/envValidator.js";
 import { scoreSource, scoreAndRankSources, type QualityScores } from "./shared/qualityScoring.js";
 import {
@@ -251,6 +251,40 @@ const PKG_VERSION: string = (() => {
 const DEFAULT_CACHE_PATH = path.resolve(PROJECT_ROOT, 'storage', 'persistent_cache');
 const DEFAULT_EVENT_PATH = path.resolve(PROJECT_ROOT, 'storage', 'event_store');
 const DEFAULT_CRAWLEE_STORAGE_PATH = path.resolve(PROJECT_ROOT, 'storage', 'crawlee');
+const PID_LOCK_PATH = path.resolve(PROJECT_ROOT, 'storage', '.server.pid');
+
+// --- PID Lock (prevents orphan instance accumulation) ---
+async function acquirePidLock(): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(PID_LOCK_PATH), { recursive: true });
+    const existing = await fs.readFile(PID_LOCK_PATH, 'utf8').catch(() => null);
+    if (existing) {
+      const pid = parseInt(existing.trim(), 10);
+      if (!isNaN(pid) && pid !== process.pid) {
+        try {
+          process.kill(pid, 0); // check if alive
+          process.kill(pid, 'SIGTERM');
+          logger.info(`Sent SIGTERM to orphaned server process ${pid}`);
+          await new Promise(r => setTimeout(r, 1500));
+        } catch {
+          // process already dead — stale lock
+        }
+      }
+    }
+    await fs.writeFile(PID_LOCK_PATH, String(process.pid), 'utf8');
+  } catch (error) {
+    logger.warn('Failed to acquire PID lock', { error: String(error) });
+  }
+}
+
+async function releasePidLock(): Promise<void> {
+  try {
+    const content = await fs.readFile(PID_LOCK_PATH, 'utf8').catch(() => '');
+    if (content.trim() === String(process.pid)) {
+      await fs.unlink(PID_LOCK_PATH);
+    }
+  } catch { /* best-effort */ }
+}
 
 // --- Global Instances ---
 // Initialize Cache and Event Store globally so they are available for both transports
@@ -336,7 +370,7 @@ async function initializeGlobalInstances(
     eventTTL: 24 * 60 * 60 * 1000, // 24 hours
     persistenceInterval: 5 * 60 * 1000, // 5 minutes
     criticalStreamIds: [], // Define critical streams if needed
-    eagerLoading: true,
+    eagerLoading: false,
   };
 
   // Encryption key format is validated by envValidator; getValidatedEnvValue throws if invalid
@@ -388,6 +422,7 @@ function configureToolsAndResources(
      * parameter (?key=...). It does NOT support Authorization headers for this
      * specific API. This function is used ONLY for log output and error messages.
      */
+    const SANITIZE_CACHE_MAX = 500;
     const sanitizeUrlCache = new Map<string, string>();
     const sanitizeUrl = (url: string): string => {
         const cached = sanitizeUrlCache.get(url);
@@ -404,6 +439,10 @@ function configureToolsAndResources(
             result = parsed.toString();
         } catch {
             result = url.replace(/([?&])(key|api_key|apiKey|apikey|token|access_token)=[^&]*/gi, '$1$2=[REDACTED]');
+        }
+        if (sanitizeUrlCache.size >= SANITIZE_CACHE_MAX) {
+            const firstKey = sanitizeUrlCache.keys().next().value;
+            if (firstKey !== undefined) sanitizeUrlCache.delete(firstKey);
         }
         sanitizeUrlCache.set(url, result);
         return result;
@@ -747,6 +786,15 @@ function configureToolsAndResources(
      * Used as a fallback when CheerioCrawler returns insufficient content.
      * Returns both the processed content and citation metadata.
      */
+    let _PlaywrightCrawlerClass: typeof import("@crawlee/playwright").PlaywrightCrawler | null = null;
+    async function loadPlaywrightCrawler() {
+        if (!_PlaywrightCrawlerClass) {
+            const mod = await import("@crawlee/playwright");
+            _PlaywrightCrawlerClass = mod.PlaywrightCrawler;
+        }
+        return _PlaywrightCrawlerClass;
+    }
+
     async function scrapeWithPlaywright(url: string): Promise<ScrapeResult> {
         let pageContent = "";
         let rawHtml = "";
@@ -756,11 +804,12 @@ function configureToolsAndResources(
         const playwrightStorageDir = `${DEFAULT_CRAWLEE_STORAGE_PATH}/playwright_${randomUUID()}`;
 
         try {
+        const PlaywrightCrawlerImpl = await loadPlaywrightCrawler();
         const crawlerConfig = new Configuration({
             persistStorage: false,
             storageClientOptions: { localDataDirectory: playwrightStorageDir },
         });
-        const crawler = new PlaywrightCrawler({
+        const crawler = new PlaywrightCrawlerImpl({
             preNavigationHooks: [
                 async ({ page }) => {
                     // SSRF protection: intercept all requests (including redirects)
@@ -2189,6 +2238,11 @@ export async function createAppAndHttpTransport(
   eventStore: PersistentEventStore,
   oauthOptions?: OAuthMiddlewareOptions
 ) {
+  // Lazy-load HTTP-only dependencies to save ~24 MB RSS in STDIO mode
+  const { default: express } = await import("express");
+  const { default: cors } = await import("cors");
+  const { default: rateLimit, ipKeyGenerator } = await import("express-rate-limit");
+
   // Ensure we have the necessary instances (either global or passed parameters)
   if ((!globalCacheInstance || !eventStoreInstance) && (!cache || !eventStore)) {
     logger.error('Cannot create app: Neither global instances nor parameters are available.');
@@ -2696,6 +2750,7 @@ async function gracefulShutdown(signal: string) {
     }
     if (globalCacheInstance?.dispose) await globalCacheInstance.dispose();
     if (eventStoreInstance?.dispose) await eventStoreInstance.dispose();
+    await releasePidLock();
   } catch (error) {
     logger.error('Error during shutdown', { error: String(error) });
   }
@@ -2713,6 +2768,11 @@ process.stdin.on('close', () => gracefulShutdown('stdin-close'));
  * based on execution context (direct run vs. import) and environment variables.
  */
 (async () => {
+  // Prevent orphan instance accumulation: kill any stale server process
+  if (!process.env.JEST_WORKER_ID) {
+    await acquirePidLock();
+  }
+
   // Initialize global instances (cache, event store, etc.).
   // Defer the expensive eager-load of the persistent cache so the STDIO
   // transport can be established first — the MCP client needs a responsive
@@ -2724,6 +2784,15 @@ process.stdin.on('close', () => gracefulShutdown('stdin-close'));
   // Tools that hit the cache will simply get cache misses until it's warm.
   if (!process.env.JEST_WORKER_ID) {
     await setupStdioTransport();
+
+    // Safety net: detect parent process death even if stdin doesn't emit end/close
+    const stdinHealthCheck = setInterval(() => {
+      if (process.stdin.destroyed || process.stdin.readableEnded) {
+        clearInterval(stdinHealthCheck);
+        gracefulShutdown('stdin-health-check');
+      }
+    }, 5000);
+    stdinHealthCheck.unref();
   }
 
   // Now load the cache in the background — this can take many seconds for

@@ -135,7 +135,7 @@ function registerFactCheck(server: McpServer): void {
         .max(1000)
         .describe('The claim or statement to verify'),
       sources: z
-        .number()
+        .coerce.number()
         .min(2)
         .max(8)
         .default(4)
@@ -518,13 +518,13 @@ function registerLiteratureReview(server: McpServer): void {
         .max(500)
         .describe('The research topic for literature review'),
       yearFrom: z
-        .number()
+        .coerce.number()
         .min(1900)
         .max(2030)
         .optional()
         .describe('Start year for publications'),
       sources: z
-        .number()
+        .coerce.number()
         .min(3)
         .max(10)
         .default(5)

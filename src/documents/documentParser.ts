@@ -4,9 +4,6 @@
  * Parses PDF, DOCX, and PPTX documents from URLs, extracting text content.
  */
 
-import { PDFParse } from 'pdf-parse';
-import * as mammoth from 'mammoth';
-import JSZip from 'jszip';
 import {
   DocumentType,
   DocumentParseErrorType,
@@ -140,6 +137,7 @@ async function fetchDocument(
  * Parses PDF document and extracts text using pdf-parse v2 API.
  */
 async function parsePdf(buffer: Buffer): Promise<{ text: string; metadata: DocumentMetadata }> {
+  const { PDFParse } = await import('pdf-parse');
   const parser = new PDFParse({ data: buffer });
 
   try {
@@ -173,6 +171,7 @@ async function parsePdf(buffer: Buffer): Promise<{ text: string; metadata: Docum
  * Parses DOCX document and extracts text.
  */
 async function parseDocx(buffer: Buffer): Promise<{ text: string; metadata: DocumentMetadata }> {
+  const mammoth = await import('mammoth');
   const result = await mammoth.extractRawText({ buffer });
 
   return {
@@ -187,6 +186,7 @@ async function parseDocx(buffer: Buffer): Promise<{ text: string; metadata: Docu
  * Parses PPTX document and extracts text from slides.
  */
 async function parsePptx(buffer: Buffer): Promise<{ text: string; metadata: DocumentMetadata }> {
+  const { default: JSZip } = await import('jszip');
   const zip = await JSZip.loadAsync(buffer);
   const textParts: string[] = [];
   let slideCount = 0;

@@ -351,10 +351,20 @@ The server uses a **single unified shutdown handler** that responds to `SIGINT`,
 4. Exits the process.
 
 ### Orphan Process Prevention
-When the parent process (Claude Code, Claude Desktop) terminates, the server detects stdin EOF and triggers graceful shutdown. This prevents orphaned Node.js processes from accumulating.
+Multiple layers prevent orphaned processes from accumulating:
+1. **PID lock file** (`storage/.server.pid`): On startup, the server checks for a stale PID lock and sends SIGTERM to any orphaned instance before writing its own PID. The lock is cleaned up on graceful shutdown.
+2. **Stdin EOF detection**: When the parent process (Claude Code, Claude Desktop) terminates, the server detects stdin `end`/`close` events and triggers graceful shutdown.
+3. **Stdin health check**: A periodic check (every 5s) detects destroyed or ended stdin as a safety net for cases where the parent dies without cleanly closing the pipe.
 
 ### Startup Cleanup
 On initialization, the server sweeps the crawlee storage directory for orphaned temp directories (`cheerio_*`, `playwright_*`) left by previous crashes.
+
+### Lazy Loading Strategy
+Heavy dependencies are loaded on demand to minimize idle memory (~80-95 MB vs ~430 MB with eager loading):
+- **PlaywrightCrawler**: Dynamically imported on first JS-rendered scrape via `@crawlee/playwright`
+- **Document parsers**: pdf-parse, mammoth, and jszip are imported inside their respective parse functions
+- **HTTP stack**: express, cors, and express-rate-limit are imported inside `createAppAndHttpTransport()` (unused in STDIO mode)
+- **Crawlee imports**: Only `@crawlee/cheerio` and `@crawlee/core` are loaded at startup instead of the umbrella `crawlee` package (which pulls in 12 sub-packages)
 
 ### Concurrency Controls
 - **Web scraping** uses bounded concurrency (`mapWithConcurrency` from `src/shared/concurrency.ts`) to limit parallel Playwright/Cheerio instances to 3 at a time.

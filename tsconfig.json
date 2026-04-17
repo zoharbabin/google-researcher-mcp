@@ -8,7 +8,7 @@
     "moduleResolution": "NodeNext",
 
     // 3. Include built‑ins for ES2022 (Promise, Set, Map, Symbol, async/await)
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     
     // 4. Enable iteration through iterators
     "downlevelIteration": true,
