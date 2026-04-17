@@ -4,23 +4,65 @@ labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
-      value: Thanks for the suggestion! Please describe what you'd like to see.
+      value: |
+        Thanks for the suggestion! Good feature requests explain the problem first, then propose a solution.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the project does this relate to?
+      options:
+        - New MCP tool
+        - Existing tool improvement
+        - Scraping / content extraction
+        - Caching / performance
+        - Transport / connectivity
+        - Documentation
+        - Developer experience
+        - Security
+        - Other
+    validations:
+      required: true
+
   - type: textarea
     id: problem
     attributes:
       label: Problem or motivation
-      description: What problem does this solve, or what use case does it enable?
+      description: |
+        What problem does this solve, or what use case does it enable?
+        A clear description of the pain point helps us prioritize.
+      placeholder: "I'm always frustrated when ..."
     validations:
       required: true
+
   - type: textarea
     id: solution
     attributes:
       label: Proposed solution
-      description: How would you like this to work?
+      description: How would you like this to work? Be as specific as you can.
     validations:
       required: true
+
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Any workarounds or alternative approaches you've tried.
+      description: Any workarounds or alternative approaches you've tried or considered.
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you be willing to contribute this?
+      description: We welcome PRs! See our [Contributing Guide](https://github.com/zoharbabin/google-researcher-mcp/blob/main/docs/CONTRIBUTING.md).
+      options:
+        - "Yes, I'd like to submit a PR"
+        - "Yes, with some guidance"
+        - "No, but I can help test"
+        - "No"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Any other information, screenshots, mockups, or examples.

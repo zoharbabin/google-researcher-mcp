@@ -1,131 +1,194 @@
-# Contributing to the Google Researcher MCP Server
+# Contributing to Google Researcher MCP
 
-First and foremost, thank you for considering contributing! It's people like you that make this open-source project a powerful and reliable tool for the community. Every contribution is valuable, whether it's a bug report, a new feature, or a documentation improvement.
+Thank you for considering contributing! Every contribution is valuable — bug reports, feature requests, documentation improvements, and code contributions all help make this project better for the community.
 
-To ensure a smooth and collaborative process, please read through these guidelines before you begin.
+## Table of Contents
+
+- [Code of Conduct](#code-of-conduct)
+- [How Can I Contribute?](#how-can-i-contribute)
+- [Development Setup](#development-setup)
+- [Making Changes](#making-changes)
+- [Submitting a Pull Request](#submitting-a-pull-request)
+- [Coding Guidelines](#coding-guidelines)
+- [Testing Requirements](#testing-requirements)
+- [Documentation Standards](#documentation-standards)
+- [Security](#security)
+- [License](#license)
 
 ## Code of Conduct
 
-We are committed to fostering an open and welcoming environment. All contributors are expected to adhere to our [**Code of Conduct**](./CODE_OF_CONDUCT.md). Please take a moment to read it before participating.
+All contributors are expected to adhere to our [Code of Conduct](./CODE_OF_CONDUCT.md). Please read it before participating.
 
 ## How Can I Contribute?
 
-- **Reporting Bugs**: If you find a bug, please create a detailed issue in our [GitHub Issues](https://github.com/zoharbabin/google-researcher-mcp/issues).
-- **Suggesting Enhancements**: Have an idea for a new feature or an improvement? Open an issue to discuss it.
-- **Writing Code**: Help fix bugs or implement new features.
-- **Improving Documentation**: Correct typos, clarify confusing sections, or add new examples.
-- **Testing**: Help us ensure reliability by running tests and reporting any failures.
+| Contribution | How |
+|---|---|
+| Report a bug | [Open a bug report](https://github.com/zoharbabin/google-researcher-mcp/issues/new?template=bug_report.yml) |
+| Request a feature | [Open a feature request](https://github.com/zoharbabin/google-researcher-mcp/issues/new?template=feature_request.yml) |
+| Report a security vulnerability | [Private vulnerability report](https://github.com/zoharbabin/google-researcher-mcp/security/advisories/new) (do **not** open a public issue) |
+| Ask a question | [GitHub Discussions](https://github.com/zoharbabin/google-researcher-mcp/discussions) |
+| Fix a bug or add a feature | Fork, branch, code, test, PR (see below) |
+| Improve documentation | Same workflow — documentation PRs are welcome |
 
-## Getting Started: Your First Contribution
+### Good first issues
 
-### Development Environment Setup
+Look for issues labeled [`good first issue`](https://github.com/zoharbabin/google-researcher-mcp/labels/good%20first%20issue) — these are scoped, well-documented tasks suitable for new contributors.
 
-1.  **Fork the Repository**:
-    Click the "Fork" button at the top right of the [project page](https://github.com/zoharbabin/google-researcher-mcp).
+## Development Setup
 
-2.  **Clone Your Fork**:
+### Prerequisites
+
+- **Node.js** >= 20.0.0 ([download](https://nodejs.org/))
+- **Git**
+- **Google API credentials** (for testing search tools) — see the [API Setup Guide](./API_SETUP.md)
+
+### Setup steps
+
+1. **Fork and clone**:
     ```bash
-    git clone https://github.com/YOUR_USERNAME/google-research-mcp.git
+    git clone https://github.com/YOUR_USERNAME/google-researcher-mcp.git
     cd google-researcher-mcp
     ```
 
-3.  **Install Dependencies**:
+2. **Install dependencies** (Chromium for Playwright is installed automatically via postinstall):
     ```bash
     npm install
-    npx playwright install chromium
     ```
 
-4.  **Configure Your Environment**:
-    Copy the example environment file and add your API keys.
+3. **Configure environment**:
     ```bash
     cp .env.example .env
+    # Edit .env and add your Google API key and Search Engine ID
     ```
-    *Note: You only need to fill in the keys for the services you intend to test or use.*
+    You only need API keys for the tools you intend to test.
 
-5.  **Run the Server in Development Mode**:
+4. **Build and verify**:
+    ```bash
+    npm run build
+    npm test
+    ```
+    All 860+ tests should pass. If any fail, check that your Node.js version is >= 20.
+
+5. **Start in development mode** (auto-reloads on changes):
     ```bash
     npm run dev
     ```
-    This will start the server and automatically reload it when you make changes.
 
-6.  **Verify Everything Works**:
+6. **Run E2E tests** (optional, requires API keys):
     ```bash
     npm run test:e2e:stdio
     ```
-    If you see "🎉 All stdio-based end-to-end tests passed!", your setup is complete.
 
-### Where to Start?
+### Useful links
 
-- **Just want to run it?** → [Quick Start in README](../README.md#quick-start)
-- **Want to understand how it works?** → [Architecture Guide](./architecture/architecture.md)
-- **Want to add a new tool?** → [Adding New Tools Guide](./ADDING_NEW_TOOLS.md)
-- **Want to write tests?** → [Testing Guide](./testing-guide.md)
-- **Need to deploy?** → [Docker section in README](../README.md#running-with-docker)
+- [Architecture Guide](./architecture/architecture.md) — how the codebase is structured
+- [Adding New Tools](./ADDING_NEW_TOOLS.md) — step-by-step guide for new MCP tools
+- [Testing Guide](./testing-guide.md) — testing philosophy, patterns, and how to write tests
 
-### Making Changes
+## Making Changes
 
-1.  **Create a New Branch**:
-    Work on a separate branch to keep your changes organized.
+1. **Create a branch** from `main`:
     ```bash
-    git checkout -b feature/my-awesome-feature
+    git checkout -b feat/my-change    # or fix/, docs/, refactor/, test/
     ```
 
-2.  **Write Your Code**:
-    - Adhere to the existing code style and conventions.
-    - Write clear, commented code, especially for complex logic.
-    - Ensure your code is covered by tests.
+2. **Make focused changes**. Keep your PR scoped to one feature or fix. If you find an unrelated issue, open a separate PR.
 
-3.  **Run Tests**:
-    Before submitting, ensure all tests pass. PRs that introduce new functionality should include corresponding tests.
+3. **Write tests** for new functionality. Bug fixes should include a test that fails without the fix.
+
+4. **Run the full test suite** before committing:
     ```bash
     npm test
-    ```
-    To check test coverage:
-    ```bash
-    npm run test:coverage
-    ```
-    For the full testing philosophy and structure, see the [**Testing Guide**](./testing-guide.md).
-
-4.  **Commit Your Changes**:
-    Use a clear and descriptive commit message. We follow the [Conventional Commits](https://www.conventionalcommits.org/) specification.
-    ```bash
-    git commit -m "feat: Add support for a new scraping library"
+    npm run build
     ```
 
-5.  **Push to Your Fork**:
+5. **Commit with [Conventional Commits](https://www.conventionalcommits.org/)** format:
     ```bash
-    git push origin feature/my-awesome-feature
+    git commit -m "feat: add support for RSS feed scraping"
+    git commit -m "fix: handle timeout in search_and_scrape"
+    git commit -m "docs: clarify Docker setup instructions"
+    ```
+
+    Common prefixes: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `perf:`, `chore:`
+
+6. **Push to your fork** and open a PR:
+    ```bash
+    git push origin feat/my-change
     ```
 
 ## Submitting a Pull Request
 
-When you're ready, open a pull request from your fork to the main repository.
+When you open a PR, the [PR template](https://github.com/zoharbabin/google-researcher-mcp/blob/main/.github/PULL_REQUEST_TEMPLATE.md) will guide you through what to include.
 
-- **Provide a Clear Title and Description**: Explain the "what" and "why" of your changes.
-- **Link to Relevant Issues**: If your PR addresses an open issue, link it using `Closes #123`.
-- **Keep it Focused**: A pull request should address one specific feature or bug.
-- **Allow Edits from Maintainers**: This helps us make small fixes or updates to your PR more efficiently.
+### PR expectations
 
-## Coding and Style Guidelines
+- **Clear title and description**: Explain what changed and why. Link to the issue it addresses (`Closes #123`).
+- **One concern per PR**: Don't mix a bug fix with a refactor. Smaller PRs get reviewed faster.
+- **All CI checks must pass**: Tests, type checking, linting, and security audit.
+- **Allow maintainer edits**: Check "Allow edits from maintainers" so we can make small adjustments.
+- **Be responsive**: If a reviewer requests changes, please address them within a reasonable timeframe.
 
-- **TypeScript**: We use TypeScript for type safety. Please include types for all new code.
-- **Code Style**: Follow the existing code conventions in the codebase.
-- **Error Handling**: All functions should handle potential errors gracefully.
+### What happens after you submit
+
+1. CI runs automatically (tests, type checks, lint, security audit, Docker build)
+2. A maintainer will review your PR, usually within a few days
+3. You may receive feedback — this is collaborative, not adversarial
+4. Once approved, a maintainer will merge your PR
+
+## Coding Guidelines
+
+### TypeScript
+
+- All new code must be written in TypeScript with proper type annotations.
+- Avoid `any` — use specific types or generics.
+- Export types that consumers might need.
+
+### Code style
+
+- Follow the existing conventions in the codebase.
+- Use descriptive variable and function names.
+- Keep functions focused and reasonably sized.
+- Handle errors at system boundaries (external APIs, user input) — don't over-defend internal code paths.
+
+### Security
+
+- Never hardcode secrets, API keys, or credentials.
+- Sanitize and validate all external input (URLs, user parameters, API responses).
+- Be cautious with `eval`, dynamic imports, or shell commands.
+- When handling URLs, use the existing `sanitizeUrl` and SSRF protections.
+- Run `npm audit` if you add or update dependencies.
+
+## Testing Requirements
+
+- **Unit tests are required** for new functionality.
+- **Bug fix PRs** should include a regression test.
+- All tests must pass: `npm test` (860+ tests across 37+ suites).
+- For test coverage: `npm run test:coverage`
+- See the [Testing Guide](./testing-guide.md) for patterns and best practices.
+
+### Test file naming
+
+- Unit/component tests: `*.spec.ts` next to the source file
+- Integration tests: `*.integration.spec.ts`
+- E2E tests: `tests/e2e/`
 
 ## Documentation Standards
 
-- If you add a new feature, please document it in the `README.md` or relevant files in the `docs/` directory.
-- If you change existing functionality, update the corresponding documentation.
-- New MCP tools must include detailed descriptions, parameter annotations, and a title — see the existing tools in `src/server.ts` for the expected metadata format.
-- Add an entry to `docs/CHANGELOG.md` under the `[Unreleased]` section for any user-facing change.
+- **New features**: Document in README.md and/or relevant files in `docs/`.
+- **Changed behavior**: Update existing documentation to match.
+- **New MCP tools**: Must include detailed descriptions, parameter annotations, and a title in the tool registration — see existing tools in `src/server.ts` for the expected format.
+- **Changelog**: Add an entry under `[Unreleased]` in `docs/CHANGELOG.md` for any user-facing change.
 
-## Versioning and Changelog
+## Versioning
 
-We use [Semantic Versioning](https://semver.org/). All changes are recorded in the [**CHANGELOG.md**](./CHANGELOG.md) file. For any user-facing change, please add an entry to the changelog under the "Unreleased" section.
+We use [Semantic Versioning](https://semver.org/):
+- **MAJOR**: Breaking changes to the MCP tool interface
+- **MINOR**: New tools, features, or non-breaking enhancements
+- **PATCH**: Bug fixes, performance improvements, documentation
 
-## Reporting Security Vulnerabilities
+## Security
 
-If you discover a security vulnerability, please do **not** open a public issue. Instead, use [GitHub's private vulnerability reporting](https://github.com/zoharbabin/google-researcher-mcp/security/advisories/new). We will address it as quickly as possible.
+If you discover a security vulnerability, please do **not** open a public issue. See our [Security Policy](../SECURITY.md) for reporting instructions.
 
 ## License
 
