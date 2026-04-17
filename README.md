@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/google-researcher-mcp.svg)](https://www.npmjs.com/package/google-researcher-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/google-researcher-mcp.svg)](https://www.npmjs.com/package/google-researcher-mcp)
+[![GitHub stars](https://img.shields.io/github/stars/zoharbabin/google-researcher-mcp?style=social)](https://github.com/zoharbabin/google-researcher-mcp/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue.svg)](https://modelcontextprotocol.io)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
@@ -122,9 +123,28 @@ Add to `~/.claude.json`:
 }
 ```
 
-### Cline / Roo Code
+### Cursor
 
-Use the same JSON configuration above in your MCP settings.
+Add to Cursor's MCP settings (Settings > MCP):
+
+```json
+{
+  "mcpServers": {
+    "google-researcher": {
+      "command": "npx",
+      "args": ["-y", "google-researcher-mcp"],
+      "env": {
+        "GOOGLE_CUSTOM_SEARCH_API_KEY": "YOUR_API_KEY_HERE",
+        "GOOGLE_CUSTOM_SEARCH_ID": "YOUR_SEARCH_ID_HERE"
+      }
+    }
+  }
+}
+```
+
+### Windsurf / Cline / Roo Code / Other MCP Clients
+
+Use the same JSON configuration above in your MCP client's settings. Any MCP-compatible client that supports STDIO transport will work.
 
 **Need API keys?** See the [API Setup Guide](docs/API_SETUP.md) for step-by-step instructions to get your Google API credentials.
 
@@ -738,6 +758,18 @@ Feature requests and improvements are tracked as [GitHub Issues](https://github.
 ## Contributing
 
 We welcome contributions of all kinds! Please see the [Contribution Guidelines](./docs/CONTRIBUTING.md) for details.
+
+## Star History
+
+If you find this project useful, please consider giving it a star — it helps others discover it.
+
+<a href="https://www.star-history.com/#zoharbabin/google-researcher-mcp&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=zoharbabin/google-researcher-mcp&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=zoharbabin/google-researcher-mcp&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=zoharbabin/google-researcher-mcp&type=Date" />
+ </picture>
+</a>
 
 ## License
 
