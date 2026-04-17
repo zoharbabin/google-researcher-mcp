@@ -13,15 +13,8 @@ const DEFAULT_MIN_PARAGRAPH_LENGTH = 50;
 /** Default similarity threshold (0.0-1.0) for near-duplicate detection */
 const DEFAULT_SIMILARITY_THRESHOLD = 0.85;
 
-/**
- * Hash proximity threshold for candidate selection.
- * Paragraphs with hashes differing by more than this value are skipped
- * in near-duplicate detection (performance optimization).
- * Uses djb2 hash which produces 32-bit integers; 1M difference covers
- * ~0.02% of hash space - sufficient to catch similar paragraphs while
- * avoiding O(n²) comparisons.
- */
-const HASH_PROXIMITY_THRESHOLD = 1_000_000;
+/** Max paragraphs to check for near-duplicates per new paragraph */
+const MAX_NEAR_DUPLICATE_CANDIDATES = 50;
 
 // ── Public Interfaces ──────────────────────────────────────────────────────
 
@@ -106,30 +99,26 @@ function hashString(str: string): number {
 }
 
 /**
- * Calculates similarity ratio between two strings using normalized Levenshtein distance.
+ * Calculates similarity between two strings using trigram (3-gram) overlap.
+ * Much more accurate than character-set overlap while still O(n).
  * Returns 0.0 (completely different) to 1.0 (identical).
  */
 function calculateSimilarity(a: string, b: string): number {
   if (a === b) return 1.0;
-  if (a.length === 0 || b.length === 0) return 0.0;
+  if (a.length < 3 || b.length < 3) return 0.0;
+  if (Math.max(a.length, b.length) > Math.min(a.length, b.length) * 2) return 0.0;
 
-  // Use the shorter string for reference
-  const shorter = a.length < b.length ? a : b;
-  const longer = a.length < b.length ? b : a;
+  const trigramsA = new Set<string>();
+  for (let i = 0; i <= a.length - 3; i++) trigramsA.add(a.substring(i, i + 3));
 
-  // Early exit for very different lengths
-  if (longer.length > shorter.length * 2) return 0.0;
-
-  // Simple character overlap ratio for performance
-  // (Full Levenshtein is O(n*m) which can be slow for long paragraphs)
-  const charSetA = new Set(a.split(''));
-  const charSetB = new Set(b.split(''));
   let overlap = 0;
-  for (const char of charSetA) {
-    if (charSetB.has(char)) overlap++;
+  let countB = 0;
+  for (let i = 0; i <= b.length - 3; i++) {
+    countB++;
+    if (trigramsA.has(b.substring(i, i + 3))) overlap++;
   }
 
-  return (2 * overlap) / (charSetA.size + charSetB.size);
+  return (2 * overlap) / (trigramsA.size + countB);
 }
 
 /**
@@ -169,32 +158,23 @@ function splitIntoParagraphs(
 function isNearDuplicate(
   paragraph: Paragraph,
   seenHashes: Map<number, Paragraph[]>,
+  allSeen: Paragraph[],
   threshold: number
 ): boolean {
-  // First check exact hash match
+  // Exact hash match — check for exact duplicate
   const candidates = seenHashes.get(paragraph.hash);
   if (candidates) {
     for (const candidate of candidates) {
-      if (candidate.normalized === paragraph.normalized) {
-        return true; // Exact duplicate
-      }
+      if (candidate.normalized === paragraph.normalized) return true;
     }
   }
 
-  // Check near-duplicates using similarity
-  // Only check paragraphs with similar hashes (within bucket) for performance
-  for (const [hash, paragraphs] of seenHashes) {
-    // Skip if hashes are too different (performance optimization)
-    if (Math.abs(hash - paragraph.hash) > HASH_PROXIMITY_THRESHOLD) continue;
-
-    for (const candidate of paragraphs) {
-      const similarity = calculateSimilarity(
-        candidate.normalized,
-        paragraph.normalized
-      );
-      if (similarity >= threshold) {
-        return true; // Near-duplicate
-      }
+  // Near-duplicate check: compare with most recent paragraphs (bounded)
+  // Duplicates across sources tend to appear close together in processing order.
+  const start = Math.max(0, allSeen.length - MAX_NEAR_DUPLICATE_CANDIDATES);
+  for (let i = start; i < allSeen.length; i++) {
+    if (calculateSimilarity(allSeen[i].normalized, paragraph.normalized) >= threshold) {
+      return true;
     }
   }
 
@@ -228,8 +208,9 @@ export function deduplicateContent(
   let originalLength = 0;
   let duplicatesRemoved = 0;
 
-  // Track seen paragraphs by hash for O(1) lookup
+  // Track seen paragraphs by hash for O(1) exact-match lookup
   const seenHashes = new Map<number, Paragraph[]>();
+  const allSeen: Paragraph[] = [];
 
   // Collect unique paragraphs with attribution
   const uniqueParagraphs: { text: string; url: string }[] = [];
@@ -247,17 +228,18 @@ export function deduplicateContent(
     );
 
     for (const paragraph of paragraphs) {
-      const isDupe = isNearDuplicate(paragraph, seenHashes, similarityThreshold);
+      const isDupe = isNearDuplicate(paragraph, seenHashes, allSeen, similarityThreshold);
 
       if (isDupe) {
         duplicatesRemoved++;
         continue;
       }
 
-      // Add to seen hashes
+      // Add to seen hashes and ordered list
       const existing = seenHashes.get(paragraph.hash) || [];
       existing.push(paragraph);
       seenHashes.set(paragraph.hash, existing);
+      allSeen.push(paragraph);
 
       // Keep this paragraph
       uniqueParagraphs.push({

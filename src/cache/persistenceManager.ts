@@ -130,7 +130,7 @@ export class PersistenceManager implements IPersistenceManager {
    * @returns The serialized entry with metadata
    * @private
    */
-  private serializeEntry<T>(key: string, entry: CacheEntry<T>): PersistedCacheEntry<T> {
+  private serializeEntry<T>(key: string, entry: CacheEntry<T>, precomputedSize?: number): PersistedCacheEntry<T> {
     return {
       key,
       value: entry.value,
@@ -138,7 +138,7 @@ export class PersistenceManager implements IPersistenceManager {
         createdAt: Date.now(),
         expiresAt: entry.expiresAt,
         staleUntil: entry.staleUntil,
-        size: entry.value === undefined ? 0 : JSON.stringify(entry.value).length,
+        size: precomputedSize ?? 0,
         contentType: typeof entry.value === 'object' ? 'application/json' : undefined
       }
     };
@@ -187,9 +187,10 @@ export class PersistenceManager implements IPersistenceManager {
       await fs.mkdir(namespacePath, { recursive: true });
       
       const entryPath = this.getEntryPath(namespace, key);
+      // Serialize once; derive size from the final JSON to avoid triple-stringify
       const serializedEntry = this.serializeEntry(key, entry);
-      
       const jsonData = JSON.stringify(serializedEntry, null, 2);
+      serializedEntry.metadata.size = jsonData.length;
 
       // Check if running in Jest test environment
       if (process.env.JEST_WORKER_ID !== undefined) {
@@ -279,24 +280,23 @@ export class PersistenceManager implements IPersistenceManager {
    */
   async saveAllEntries(entries: Map<string, Map<string, CacheEntry<any>>>): Promise<void> {
     try {
-      // Ensure directories exist before any file operation
       await this.ensureDirectoriesExist();
-      
-      // Create a list of save operations
-      const saveOperations: Promise<void>[] = [];
-      
-      // Process each namespace
-      for (const [namespace, namespaceEntries] of entries.entries()) {
-        // Process each entry in the namespace
-        for (const [key, entry] of namespaceEntries.entries()) {
-          saveOperations.push(this.saveEntry(namespace, key, entry));
+
+      // Collect all save operations
+      const ops: Array<{ namespace: string; key: string; entry: CacheEntry<any> }> = [];
+      for (const [namespace, namespaceEntries] of entries) {
+        for (const [key, entry] of namespaceEntries) {
+          ops.push({ namespace, key, entry });
         }
       }
-      
-      // Wait for all save operations to complete
-      await Promise.all(saveOperations);
-      
-      // Update metadata
+
+      // Bounded concurrency to avoid exhausting file descriptors
+      const CONCURRENCY = 50;
+      for (let i = 0; i < ops.length; i += CONCURRENCY) {
+        const batch = ops.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(op => this.saveEntry(op.namespace, op.key, op.entry)));
+      }
+
       await this.updateMetadata(entries);
     } catch (error) {
       logger.error('Error saving all cache entries', { error: error instanceof Error ? error.message : String(error) });
@@ -319,31 +319,19 @@ export class PersistenceManager implements IPersistenceManager {
    */
   private async updateMetadata(entries: Map<string, Map<string, CacheEntry<any>>>): Promise<void> {
     try {
-      // Ensure directories exist before any file operation
       await this.ensureDirectoriesExist();
-      
+
       let totalEntries = 0;
-      let totalSize = 0;
-      
-      // Calculate statistics
       for (const namespaceEntries of entries.values()) {
         totalEntries += namespaceEntries.size;
-        
-        for (const entry of namespaceEntries.values()) {
-          totalSize += JSON.stringify(entry.value).length;
-        }
       }
-      
+
       const metadata: CacheMetadata = {
         version: '1.0.0',
         lastPersisted: Date.now(),
-        stats: {
-          totalEntries,
-          totalSize
-        }
+        stats: { totalEntries, totalSize: 0 }
       };
-      
-      // Write metadata to disk
+
       await fs.writeFile(this.metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
     } catch (error) {
       logger.error('Error updating metadata', { error: error instanceof Error ? error.message : String(error) });
@@ -415,15 +403,18 @@ export class PersistenceManager implements IPersistenceManager {
           const entryPath = path.join(namespacePath, entryFile);
           
           try {
-            // Read and parse the entry
             const data = await fs.readFile(entryPath, 'utf8');
             const persistedEntry = JSON.parse(data) as PersistedCacheEntry<any>;
-            
-            // Add to namespace map
+
+            // Skip and delete expired entries during load
+            if (persistedEntry.metadata.expiresAt && persistedEntry.metadata.expiresAt <= Date.now()) {
+              fs.unlink(entryPath).catch(() => {});
+              continue;
+            }
+
             namespaceEntries.set(persistedEntry.key, this.deserializeEntry(persistedEntry));
           } catch (error) {
             logger.error('Error loading entry', { entryPath, error: error instanceof Error ? error.message : String(error) });
-            // Skip this entry
           }
         }
       }

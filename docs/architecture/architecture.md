@@ -67,15 +67,16 @@ google-researcher-mcp/
 │   │   ├── instrumentTool.ts     # Tool wrapper for auto metrics
 │   │   ├── prometheusFormatter.ts # Prometheus export format
 │   │   ├── circuitBreaker.ts     # Resilience for external APIs
+│   │   ├── concurrency.ts        # Bounded parallel execution
 │   │   ├── contentAnnotations.ts # MCP content annotations
-│   │   ├── contentDeduplication.ts
+│   │   ├── contentDeduplication.ts # Trigram-based deduplication
 │   │   ├── contentSizeOptimization.ts
 │   │   ├── citationExtractor.ts  # Citation metadata extraction
 │   │   ├── envValidator.ts       # Startup validation
 │   │   ├── logger.ts             # Structured logging
 │   │   ├── oauthMiddleware.ts    # OAuth 2.1 for HTTP transport
 │   │   ├── patentConstants.ts    # Shared patent constants and helpers
-│   │   ├── persistentEventStore.ts # SSE session replay
+│   │   ├── persistentEventStore.ts # SSE session replay (indexed)
 │   │   ├── qualityScoring.ts     # Source ranking
 │   │   └── urlValidator.ts       # SSRF protection
 │   ├── tools/                    # Standalone tool implementations
@@ -339,6 +340,29 @@ Quick overview:
 
 ### Swapping Backends
 The `PersistenceManager` for both the cache and event store can be replaced with custom implementations (e.g., to use a Redis or database backend instead of the filesystem) by creating a new class that conforms to the `IPersistenceManager` interface.
+
+## Process Lifecycle and Resilience
+
+### Graceful Shutdown
+The server uses a **single unified shutdown handler** that responds to `SIGINT`, `SIGTERM`, and stdin EOF (for STDIO transport). The handler:
+1. Sets a `isShuttingDown` flag to prevent re-entry.
+2. Starts a 5-second force-exit timer (`.unref()`'d to not block the event loop).
+3. Closes transports, HTTP server, cache, and event store in order.
+4. Exits the process.
+
+### Orphan Process Prevention
+When the parent process (Claude Code, Claude Desktop) terminates, the server detects stdin EOF and triggers graceful shutdown. This prevents orphaned Node.js processes from accumulating.
+
+### Startup Cleanup
+On initialization, the server sweeps the crawlee storage directory for orphaned temp directories (`cheerio_*`, `playwright_*`) left by previous crashes.
+
+### Concurrency Controls
+- **Web scraping** uses bounded concurrency (`mapWithConcurrency` from `src/shared/concurrency.ts`) to limit parallel Playwright/Cheerio instances to 3 at a time.
+- **Cache persistence** batches disk writes in groups of 50.
+- **Sequential search** sessions are capped at 100 steps, 200 sources, and 50 knowledge gaps per session.
+
+### Circuit Breaker
+External API calls (web scraping) are wrapped in a circuit breaker pattern (`src/shared/circuitBreaker.ts`) that trips after repeated failures and auto-recovers after a cooldown period.
 
 ## Deployment and Scaling
 

@@ -1,7 +1,7 @@
 {
   "name": "google-researcher-mcp",
   "mcpName": "io.github.zoharbabin/google-researcher",
-  "version": "6.0.3",
+  "version": "6.1.0",
   "description": "An MCP server providing Google Search, web scraping, and multi-source research tools for AI assistants.",
   "author": {
     "name": "Zohar Babin",
@@ -56,6 +56,7 @@
   },
   "scripts": {
     "prepare": "npm run build",
+    "postinstall": "npx playwright install chromium 2>/dev/null || echo 'Note: Playwright browser install skipped (run npx playwright install chromium manually if scraping JS-rendered pages)'",
     "prepublishOnly": "npm run build && npm test",
     "test:e2e": "npm run build && npm run test:e2e:stdio && npm run test:e2e:sse && npm run test:e2e:youtube",
     "test:e2e:stdio": "node tests/e2e/e2e_stdio_mcp_client_test.mjs",

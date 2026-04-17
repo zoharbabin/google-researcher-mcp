@@ -138,31 +138,26 @@ export function scoreRelevance(content: string, query: string): number {
   if (!content || !query) return 0.5;
 
   const normalizedContent = content.toLowerCase();
-  const queryTerms = query
-    .toLowerCase()
+  const lowerQuery = query.toLowerCase();
+  const queryTerms = lowerQuery
     .split(/\s+/)
     .filter((term) => term.length > 2);
 
   if (queryTerms.length === 0) return 0.5;
 
+  // Pre-compile all regexes once for the query
+  const termRegexes = queryTerms.map(term =>
+    new RegExp(`\\b${escapeRegex(term)}\\b`, 'gi')
+  );
+
+  const exactPhraseBonus = normalizedContent.includes(lowerQuery) ? 0.3 : 0;
+
   let matchScore = 0;
-  let exactPhraseBonus = 0;
-
-  // Check for exact phrase match (high bonus)
-  if (normalizedContent.includes(query.toLowerCase())) {
-    exactPhraseBonus = 0.3;
-  }
-
-  // Score individual term matches with frequency weighting
-  for (const term of queryTerms) {
-    // Use word boundary matching
-    const regex = new RegExp(`\\b${escapeRegex(term)}\\b`, 'gi');
+  for (const regex of termRegexes) {
+    regex.lastIndex = 0;
     const matches = normalizedContent.match(regex);
-
     if (matches) {
-      // Frequency-based scoring with diminishing returns
-      const frequency = matches.length;
-      matchScore += Math.min(frequency / 5, 1) / queryTerms.length;
+      matchScore += Math.min(matches.length / 5, 1) / queryTerms.length;
     }
   }
 

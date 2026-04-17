@@ -37,6 +37,8 @@ import {
  */
 export class PersistentEventStore implements EventStore {
   private memoryStore: Map<string, EventData>;
+  private streamIndex: Map<string, Set<string>>; // streamId → set of eventIds
+  private estimatedMemoryBytes: number = 0;
   private persistenceManager: EventPersistenceManager;
   private options: PersistentEventStoreOptions;
   private stats: EventStoreInternalStats;
@@ -64,6 +66,7 @@ export class PersistentEventStore implements EventStore {
     };
     
     this.memoryStore = new Map();
+    this.streamIndex = new Map();
     this.persistenceManager = new EventPersistenceManager({
       storagePath: options.storagePath,
       criticalStreamIds: options.criticalStreamIds,
@@ -101,19 +104,50 @@ export class PersistentEventStore implements EventStore {
     
     // Load existing events if eagerLoading is enabled
     if (this.options.eagerLoading) {
-      this.loadEvents();
+      this.loadEvents().catch(err =>
+        logger.error('Failed to load events from disk', { error: String(err) })
+      );
     }
   }
-  
+
+  // --- Internal index helpers ---
+
+  private addToIndex(eventId: string, data: EventData): void {
+    this.memoryStore.set(eventId, data);
+    let streamSet = this.streamIndex.get(data.streamId);
+    if (!streamSet) {
+      streamSet = new Set();
+      this.streamIndex.set(data.streamId, streamSet);
+    }
+    streamSet.add(eventId);
+    this.estimatedMemoryBytes += this.estimateEventSize(data);
+  }
+
+  private removeFromIndex(eventId: string): void {
+    const data = this.memoryStore.get(eventId);
+    if (!data) return;
+    this.estimatedMemoryBytes -= this.estimateEventSize(data);
+    this.memoryStore.delete(eventId);
+    const streamSet = this.streamIndex.get(data.streamId);
+    if (streamSet) {
+      streamSet.delete(eventId);
+      if (streamSet.size === 0) this.streamIndex.delete(data.streamId);
+    }
+  }
+
+  private estimateEventSize(data: EventData): number {
+    // Rough estimate: 200 bytes base overhead + message size
+    return 200 + (typeof data.message === 'object' ? JSON.stringify(data.message).length * 2 : 0);
+  }
+
   /**
    * Loads events from disk into memory
    */
   private async loadEvents(): Promise<void> {
-    try {
-      const events = await this.persistenceManager.loadEvents();
-      this.memoryStore = events;
-    } catch (error) {
-      logger.error('Failed to load events from disk', { error: String(error) });
+    const events = await this.persistenceManager.loadEvents();
+    // Rebuild index from loaded data
+    for (const [eventId, data] of events) {
+      this.addToIndex(eventId, data);
     }
   }
   
@@ -161,8 +195,12 @@ export class PersistentEventStore implements EventStore {
    * @returns The stream ID portion of the event ID
    */
   private getStreamIdFromEventId(eventId: string): string {
-    const parts = eventId.split("_");
-    return parts.length > 0 ? parts[0] : "";
+    // Format: streamId_timestamp_random — stream ID may contain underscores
+    const lastUnderscore = eventId.lastIndexOf('_');
+    if (lastUnderscore <= 0) return "";
+    const secondLast = eventId.lastIndexOf('_', lastUnderscore - 1);
+    if (secondLast <= 0) return eventId.split("_")[0] || "";
+    return eventId.substring(0, secondLast);
   }
   
   /**
@@ -200,12 +238,12 @@ export class PersistentEventStore implements EventStore {
         metadata: { userId } 
       };
       
-      // Store in memory
-      this.memoryStore.set(eventId, eventData);
+      // Store in memory with index maintenance
+      this.addToIndex(eventId, eventData);
       
-      // Check if we need to enforce limits
-      await this.enforceStreamLimits(streamId);
-      await this.enforceGlobalLimits();
+      // Enforce limits (synchronous — uses indexed lookups)
+      this.enforceStreamLimits(streamId);
+      this.enforceGlobalLimits();
       
       // Persist immediately if this is a critical stream
       if (this.options.criticalStreamIds?.includes(streamId)) {
@@ -292,9 +330,11 @@ export class PersistentEventStore implements EventStore {
         }
       }
       
-      // Get all events for this stream, sorted chronologically by timestamp
-      const streamEvents = Array.from(this.memoryStore.entries())
-        .filter(([_, data]) => data.streamId === streamId)
+      // Use the stream index for O(k) lookup instead of O(n) full scan
+      const streamSet = this.streamIndex.get(streamId);
+      if (!streamSet) return "";
+      const streamEvents = Array.from(streamSet)
+        .map(id => [id, this.memoryStore.get(id)!] as [string, EventData])
         .sort((a, b) => a[1].timestamp - b[1].timestamp);
       
       // Find the position of the last event
@@ -349,7 +389,7 @@ export class PersistentEventStore implements EventStore {
     try {
       const eventData = await this.persistenceManager.loadEvent(eventId);
       if (eventData) {
-        this.memoryStore.set(eventId, eventData);
+        this.addToIndex(eventId, eventData);
         return true;
       }
     } catch (error) {
@@ -366,28 +406,19 @@ export class PersistentEventStore implements EventStore {
    * 
    * @param streamId - The ID of the stream to check
    */
-  private async enforceStreamLimits(streamId: string): Promise<void> {
+  private enforceStreamLimits(streamId: string): void {
     if (!this.options.maxEventsPerStream) return;
-    
-    // Get all events for this stream
-    const streamEvents = Array.from(this.memoryStore.entries())
-      .filter(([_, data]) => data.streamId === streamId)
-      .sort((a, b) => {
-        // Sort by timestamp (oldest first)
-        return this.memoryStore.get(a[0])!.timestamp - 
-               this.memoryStore.get(b[0])!.timestamp;
-      });
-    
-    // If we exceed the limit, remove oldest events
-    if (streamEvents.length > this.options.maxEventsPerStream) {
-      const eventsToRemove = streamEvents.slice(
-        0, 
-        streamEvents.length - this.options.maxEventsPerStream
-      );
-      
-      for (const [eventId] of eventsToRemove) {
-        this.memoryStore.delete(eventId);
-      }
+    const streamSet = this.streamIndex.get(streamId);
+    if (!streamSet || streamSet.size <= this.options.maxEventsPerStream) return;
+
+    // Sort only this stream's events by timestamp
+    const sorted = Array.from(streamSet)
+      .map(id => ({ id, ts: this.memoryStore.get(id)!.timestamp }))
+      .sort((a, b) => a.ts - b.ts);
+
+    const removeCount = sorted.length - this.options.maxEventsPerStream;
+    for (let i = 0; i < removeCount; i++) {
+      this.removeFromIndex(sorted[i].id);
     }
   }
   
@@ -397,25 +428,16 @@ export class PersistentEventStore implements EventStore {
    * If the total number of events exceeds the configured limit,
    * the oldest events are removed.
    */
-  private async enforceGlobalLimits(): Promise<void> {
+  private enforceGlobalLimits(): void {
     if (!this.options.maxTotalEvents) return;
-    
-    if (this.memoryStore.size > this.options.maxTotalEvents) {
-      // Sort all events by timestamp (oldest first)
-      const allEvents = Array.from(this.memoryStore.entries())
-        .sort((a, b) => {
-          return a[1].timestamp - b[1].timestamp;
-        });
-      
-      // Remove oldest events to get back under the limit
-      const eventsToRemove = allEvents.slice(
-        0, 
-        allEvents.length - this.options.maxTotalEvents
-      );
-      
-      for (const [eventId] of eventsToRemove) {
-        this.memoryStore.delete(eventId);
-      }
+    if (this.memoryStore.size <= this.options.maxTotalEvents) return;
+
+    const allEvents = Array.from(this.memoryStore.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    const removeCount = allEvents.length - this.options.maxTotalEvents;
+    for (let i = 0; i < removeCount; i++) {
+      this.removeFromIndex(allEvents[i][0]);
     }
   }
   
@@ -436,21 +458,20 @@ export class PersistentEventStore implements EventStore {
    */
   async cleanup(): Promise<void> {
     if (!this.options.eventTTL) return;
-    
-    const now = Date.now();
-    const expirationThreshold = now - this.options.eventTTL;
-    
-    // Find expired events
-    const expiredEvents = Array.from(this.memoryStore.entries())
-      .filter(([_, data]) => data.timestamp < expirationThreshold);
-    
-    // Remove expired events
-    for (const [eventId] of expiredEvents) {
-      this.memoryStore.delete(eventId);
+
+    const expirationThreshold = Date.now() - this.options.eventTTL;
+    const expiredIds: string[] = [];
+
+    for (const [eventId, data] of this.memoryStore) {
+      if (data.timestamp < expirationThreshold) expiredIds.push(eventId);
     }
-    
-    if (expiredEvents.length > 0) {
-      logger.info(`Cleaned up ${expiredEvents.length} expired events`);
+
+    for (const eventId of expiredIds) {
+      this.removeFromIndex(eventId);
+    }
+
+    if (expiredIds.length > 0) {
+      logger.info(`Cleaned up ${expiredIds.length} expired events`);
     }
   }
   
@@ -460,31 +481,26 @@ export class PersistentEventStore implements EventStore {
    * @returns Statistics about the event store
    */
   async getStats(): Promise<EventStoreStats> {
-    // Calculate memory usage
-    let memoryUsage = 0;
+    // Use stream index for per-stream counts and running memory estimate
+    // instead of JSON.stringify-ing every event
     const eventsByStream: Record<string, number> = {};
+    for (const [streamId, eventIds] of this.streamIndex) {
+      eventsByStream[streamId] = eventIds.size;
+    }
+
     let oldestTimestamp = Date.now();
     let newestTimestamp = 0;
-    
-    for (const [_, data] of Array.from(this.memoryStore.entries())) {
-      // Rough estimate of memory usage
-      memoryUsage += JSON.stringify(data).length * 2; // Unicode chars are 2 bytes
-      
-      // Count events by stream
-      eventsByStream[data.streamId] = (eventsByStream[data.streamId] || 0) + 1;
-      
-      // Track oldest and newest events
+    for (const data of this.memoryStore.values()) {
       if (data.timestamp < oldestTimestamp) oldestTimestamp = data.timestamp;
       if (data.timestamp > newestTimestamp) newestTimestamp = data.timestamp;
     }
-    
-    // Get disk usage
+
     const diskUsage = await this.persistenceManager.calculateDiskUsage();
-    
+
     return {
       totalEvents: this.memoryStore.size,
       eventsByStream,
-      memoryUsage,
+      memoryUsage: this.estimatedMemoryBytes,
       diskUsage,
       hitRatio: this.stats.totalRequests ? this.stats.hits / this.stats.totalRequests : 0,
       missRatio: this.stats.totalRequests ? this.stats.misses / this.stats.totalRequests : 0,
@@ -522,8 +538,10 @@ export class PersistentEventStore implements EventStore {
       logger.error('Error disposing persistence manager', { error: String(error) });
     }
 
-    // Clear memory store to help with garbage collection
+    // Clear memory store and index to help with garbage collection
     this.memoryStore.clear();
+    this.streamIndex.clear();
+    this.estimatedMemoryBytes = 0;
 
     // Log final audit event regardless of persistence success/failure
     await this.logAuditEvent({
@@ -550,10 +568,10 @@ export class PersistentEventStore implements EventStore {
     // Find all events associated with this user
     const userEvents = Array.from(this.memoryStore.entries())
       .filter(([_, data]) => data.metadata?.userId === userId);
-    
+
     // Delete each event
     for (const [eventId, data] of userEvents) {
-      this.memoryStore.delete(eventId);
+      this.removeFromIndex(eventId);
       
       // Also delete from disk
       try {

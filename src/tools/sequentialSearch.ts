@@ -107,6 +107,9 @@ const sessions = new Map<string, ResearchSession>();
 const sessionLastAccess = new Map<string, number>();
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_SESSIONS = 50;
+const MAX_STEPS_PER_SESSION = 100;
+const MAX_SOURCES_PER_SESSION = 200;
+const MAX_GAPS_PER_SESSION = 50;
 
 /**
  * Current active session ID (most recent)
@@ -399,7 +402,9 @@ export function handleSequentialSearch(input: SequentialSearchInput): {
     branchId,
     branchFromStep,
   };
-  session.steps.push(step);
+  if (session.steps.length < MAX_STEPS_PER_SESSION) {
+    session.steps.push(step);
+  }
 
   // Handle branching
   if (branchId) {
@@ -407,7 +412,7 @@ export function handleSequentialSearch(input: SequentialSearchInput): {
   }
 
   // Add source if provided
-  if (source) {
+  if (source && session.sources.length < MAX_SOURCES_PER_SESSION) {
     session.sources.push({
       ...source,
       addedAtStep: stepNumber,
@@ -416,7 +421,7 @@ export function handleSequentialSearch(input: SequentialSearchInput): {
   }
 
   // Add knowledge gap if provided
-  if (knowledgeGap) {
+  if (knowledgeGap && session.gaps.length < MAX_GAPS_PER_SESSION) {
     session.gaps.push({
       description: knowledgeGap,
       identifiedAtStep: stepNumber,

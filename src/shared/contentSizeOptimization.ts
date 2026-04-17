@@ -77,6 +77,12 @@ export interface SizeMetadata {
   sizeCategory: 'small' | 'medium' | 'large' | 'very_large';
 }
 
+// Pre-compiled regexes used in findNaturalBreakpoint and extractHeadings
+const SENTENCE_END_REGEX = /[.!?]\s/g;
+const MARKDOWN_HEADING_REGEX = /^(#{1,6})\s+(.+)$/gm;
+const UNDERLINE_HEADING_REGEX = /^(.+)\n(={3,}|-{3,})$/gm;
+const CAPS_HEADING_REGEX = /^([A-Z][A-Z\s]{10,})$/gm;
+
 // Size thresholds in characters
 const SIZE_THRESHOLDS = {
   small: 5_000,      // < 5k chars (~1.25k tokens)
@@ -136,10 +142,10 @@ function findNaturalBreakpoint(text: string, maxPosition: number): number {
   }
 
   // Look for sentence end (. ! ?)
-  const sentenceEndRegex = /[.!?]\s/g;
+  SENTENCE_END_REGEX.lastIndex = 0;
   let lastSentenceEnd = -1;
   let match;
-  while ((match = sentenceEndRegex.exec(text)) !== null) {
+  while ((match = SENTENCE_END_REGEX.exec(text)) !== null) {
     if (match.index > maxPosition) break;
     lastSentenceEnd = match.index + 2; // Include punctuation and space
   }
@@ -229,9 +235,9 @@ export function extractHeadings(content: string): Array<{ level: number; text: s
   const headings: Array<{ level: number; text: string }> = [];
 
   // Pattern 1: Markdown-style headings (# ## ### etc.)
-  const markdownHeadingRegex = /^(#{1,6})\s+(.+)$/gm;
+  MARKDOWN_HEADING_REGEX.lastIndex = 0;
   let match;
-  while ((match = markdownHeadingRegex.exec(content)) !== null) {
+  while ((match = MARKDOWN_HEADING_REGEX.exec(content)) !== null) {
     headings.push({
       level: match[1].length,
       text: match[2].trim(),
@@ -239,8 +245,8 @@ export function extractHeadings(content: string): Array<{ level: number; text: s
   }
 
   // Pattern 2: Underlined headings (=== or ---)
-  const underlineHeadingRegex = /^(.+)\n(={3,}|-{3,})$/gm;
-  while ((match = underlineHeadingRegex.exec(content)) !== null) {
+  UNDERLINE_HEADING_REGEX.lastIndex = 0;
+  while ((match = UNDERLINE_HEADING_REGEX.exec(content)) !== null) {
     headings.push({
       level: match[2].startsWith('=') ? 1 : 2,
       text: match[1].trim(),
@@ -248,8 +254,8 @@ export function extractHeadings(content: string): Array<{ level: number; text: s
   }
 
   // Pattern 3: ALL CAPS lines that look like headings (at least 3 words)
-  const capsHeadingRegex = /^([A-Z][A-Z\s]{10,})$/gm;
-  while ((match = capsHeadingRegex.exec(content)) !== null) {
+  CAPS_HEADING_REGEX.lastIndex = 0;
+  while ((match = CAPS_HEADING_REGEX.exec(content)) !== null) {
     const text = match[1].trim();
     if (text.split(/\s+/).length >= 2 && text.length < 100) {
       headings.push({
@@ -335,10 +341,11 @@ export function filterByKeywords(
   minParagraphLength = 50
 ): KeywordFilterResult {
   if (keywords.length === 0) {
+    const count = splitIntoParagraphs(content).length;
     return {
       content,
-      totalParagraphs: splitIntoParagraphs(content).length,
-      includedParagraphs: splitIntoParagraphs(content).length,
+      totalParagraphs: count,
+      includedParagraphs: count,
       excludedParagraphs: 0,
     };
   }

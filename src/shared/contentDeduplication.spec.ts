@@ -144,7 +144,7 @@ describe('contentDeduplication', () => {
       const sources: SourceContent[] = [
         {
           url: 'https://single.com',
-          content: 'First paragraph of single source content with enough text to pass the minimum length filter requirement.\n\nSecond paragraph of single source content also with enough text to pass the minimum length filter requirement.',
+          content: 'First paragraph about quantum computing explores the history and development of qubits across research institutions worldwide.\n\nSecond paragraph discusses machine learning algorithms and their applications in natural language processing and computer vision.',
         },
       ];
 

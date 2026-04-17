@@ -18,8 +18,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
-import { PersistentCache } from '../cache/index.js';
-import { CacheEntry } from '../cache/types.js';
 import { hasRequiredScopes } from './oauthScopes.js';
 import { logger } from './logger.js';
 
@@ -142,13 +140,9 @@ export function createOAuthMiddleware(options: OAuthMiddlewareOptions) {
     jwksRequestsPerMinute: 10
   });
 
-  // Create cache for JWKS
-  const jwksCache = new PersistentCache({
-    defaultTTL: jwksCacheTtl,
-    maxSize: 100,
-    storagePath: './storage/jwks_cache',
-    eagerLoading: true
-  });
+  // Simple in-memory JWKS key cache — no disk persistence needed for
+  // transient signing keys. Avoids PersistentCache timer/signal handler leaks.
+  const jwksKeyCache = new Map<string, { value: string; expiresAt: number }>();
 
   /**
    * Gets the signing key from JWKS
@@ -158,37 +152,21 @@ export function createOAuthMiddleware(options: OAuthMiddlewareOptions) {
    */
   async function getSigningKey(kid: string): Promise<string> {
     try {
-      // Try to get from cache first using getOrCompute with a null computeFn
-      // that will only be called if the key is not in cache
-      return await jwksCache.getOrCompute<string>(
-        'jwks',
-        { kid },
-        async () => {
-          // Fetch from JWKS client if not in cache
-          const key = await new Promise<string>((resolve, reject) => {
-            jwksRsaClient.getSigningKey(kid, (err, key) => {
-              if (err) {
-                return reject(err);
-              }
-              
-              // Handle different key types
-              const signingKey = key.getPublicKey?.() || (key as any).rsaPublicKey;
-              if (!signingKey) {
-                return reject(new Error('Unable to get signing key'));
-              }
-              
-              resolve(signingKey);
-            });
-          });
-          
-          return key;
-        },
-        {
-          ttl: jwksCacheTtl, // Use the configured TTL
-          staleWhileRevalidate: true,
-          staleTime: 24 * 60 * 60 * 1000 // Allow serving stale keys for up to a day while revalidating
-        }
-      );
+      // Check simple in-memory cache first
+      const cached = jwksKeyCache.get(kid);
+      if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+      const signingKey = await new Promise<string>((resolve, reject) => {
+        jwksRsaClient.getSigningKey(kid, (err, key) => {
+          if (err) return reject(err);
+          const pub = key.getPublicKey?.() || (key as any).rsaPublicKey;
+          if (!pub) return reject(new Error('Unable to get signing key'));
+          resolve(pub);
+        });
+      });
+
+      jwksKeyCache.set(kid, { value: signingKey, expiresAt: Date.now() + jwksCacheTtl });
+      return signingKey;
     } catch (error) {
       logger.error('Error getting signing key', { error: error instanceof Error ? error.message : String(error) });
       throw new OAuthTokenError('Unable to verify token signature', 'invalid_token');

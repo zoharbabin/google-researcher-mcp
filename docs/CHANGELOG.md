@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0] - 2026-04-17
+
+### Fixed
+- **Orphan Process Prevention**: Server now detects stdin EOF and triggers graceful shutdown, preventing orphaned processes when parent (Claude Code, Claude Desktop) terminates
+- **Unified Shutdown**: Consolidated duplicate shutdown paths into a single `gracefulShutdown()` function with idempotency guard
+- **Playwright Process Leaks**: Timeout-killed Playwright scrapes now properly await `crawler.teardown()` and `crawlPromise` in finally blocks
+- **Event Store O(n) Scan**: Added per-stream index (`Map<string, Set<string>>`) to `PersistentEventStore`, reducing `replayEventsAfter` and limit enforcement from O(n) to O(k) per stream
+- **Event Store Disk Load**: `loadEventFromDisk` now updates the stream index, fixing broken replays for disk-loaded events
+- **Event ID Parsing**: `getStreamIdFromEventId` now handles stream IDs containing underscores
+- **Cache Triple Serialization**: Eliminated redundant JSON.stringify calls in `PersistenceManager.saveAllEntries()`
+- **Cache Dirty Flag**: `persistToDisk` now restores `isDirty = true` on failure so the next attempt retries
+- **JWKS Cache Leak**: Replaced `PersistentCache` for OAuth JWKS with a simple TTL Map, eliminating timer and signal handler leaks
+- **Document Parser OOM**: `fetchDocument` now streams response body with per-chunk size limits instead of buffering the entire response
+- **Deduplication Accuracy**: Replaced character-set overlap similarity with trigram-based similarity for near-duplicate detection
+- **Regex Recompilation**: Pre-compiled module-scope regexes in `contentSizeOptimization.ts` and `qualityScoring.ts`
+- **Test Suite DOMMatrix**: Added polyfill in `jest.setup.js` for `DOMMatrix` and `Path2D` required by pdfjs-dist, fixing 160 pre-existing test failures
+
+### Changed
+- **Bounded Scraping Concurrency**: `search_and_scrape` now limits parallel scrapes to 3 via `mapWithConcurrency` (new `src/shared/concurrency.ts`)
+- **Playwright Event-Driven Waits**: Replaced fixed `page.waitForTimeout()` sleeps with `page.waitForSelector()` and `page.waitForLoadState('networkidle')`
+- **Cache Persistence Batching**: `saveAllEntries` now processes disk writes in batches of 50
+- **Expired Entry Pruning**: Cache `loadAllEntries` now deletes expired entries during load; `persistToDisk` filters them before write
+- **Sequential Search Caps**: Added per-session limits: 100 steps, 200 sources, 50 knowledge gaps
+- **Startup Cleanup**: `initializeGlobalInstances` sweeps orphaned crawlee temp directories
+- **URL Sanitization Cache**: `sanitizeUrl` results are now memoized per server lifetime
+- **Automated Chromium Install**: `npm install` now automatically installs Chromium via postinstall hook; graceful fallback if install fails
+- **Playwright Missing Browser Guard**: `scrapeWithPlaywright` returns a clear error message instead of crashing when Chromium is not installed
+
 ## [6.0.1] - 2026-03-30
 
 ### Fixed

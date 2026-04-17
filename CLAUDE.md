@@ -7,8 +7,7 @@
 
 ### Build & Run
 ```bash
-npm install                    # Install dependencies
-npx playwright install chromium # Install browser for JS rendering
+npm install                    # Install deps + Chromium browser (via postinstall)
 npm run build                  # Build TypeScript to dist/
 npm start                      # Start server (STDIO mode default)
 npm run dev                    # Start with hot reload (development)
@@ -17,7 +16,7 @@ PORT=3001 npm start            # Start HTTP server on custom port
 
 ### Testing
 ```bash
-npm test                       # Run all unit/component tests (840+)
+npm test                       # Run all unit/component tests (860+)
 npm run test:coverage          # Generate code coverage report
 npm run test:e2e               # Full E2E suite (STDIO + SSE + YouTube)
 npm run test:e2e:stdio         # STDIO transport E2E only

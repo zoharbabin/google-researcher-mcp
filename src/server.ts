@@ -59,6 +59,7 @@ import {
   type Citation,
 } from "./shared/citationExtractor.js";
 import { CircuitBreaker, CircuitOpenError } from "./shared/circuitBreaker.js";
+import { mapWithConcurrency } from "./shared/concurrency.js";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { validateEnvironmentOrExit, getValidatedEnvValue } from "./shared/envValidator.js";
 import { scoreSource, scoreAndRankSources, type QualityScores } from "./shared/qualityScoring.js";
@@ -299,6 +300,22 @@ async function initializeGlobalInstances(
   // any other output corrupts the protocol and causes silent scraping failures.
   crawleeLog.setLevel(CrawleeLogLevel.OFF);
 
+  // Sweep orphaned crawlee temp directories from previous crashes
+  try {
+    const crawleeEntries = await fs.readdir(crawleeStoragePath);
+    const orphaned = crawleeEntries.filter(d => /^(cheerio|playwright)_/.test(d));
+    if (orphaned.length > 0) {
+      await Promise.all(
+        orphaned.map(d =>
+          fs.rm(path.join(crawleeStoragePath, d), { recursive: true, force: true }).catch(() => {})
+        )
+      );
+      logger.info(`Cleaned ${orphaned.length} orphaned crawlee temp directories`);
+    }
+  } catch {
+    // Directory may not exist yet on first run
+  }
+
   globalCacheInstance = new PersistentCache({
     defaultTTL: 5 * 60 * 1000, // 5 minutes default TTL
     maxSize: 1000, // Maximum 1000 entries
@@ -371,7 +388,11 @@ function configureToolsAndResources(
      * parameter (?key=...). It does NOT support Authorization headers for this
      * specific API. This function is used ONLY for log output and error messages.
      */
+    const sanitizeUrlCache = new Map<string, string>();
     const sanitizeUrl = (url: string): string => {
+        const cached = sanitizeUrlCache.get(url);
+        if (cached !== undefined) return cached;
+        let result: string;
         try {
             const parsed = new URL(url);
             const sensitiveParams = ['key', 'api_key', 'apiKey', 'apikey', 'token', 'access_token'];
@@ -380,10 +401,12 @@ function configureToolsAndResources(
                     parsed.searchParams.set(param, '[REDACTED]');
                 }
             }
-            return parsed.toString();
+            result = parsed.toString();
         } catch {
-            return url.replace(/([?&])(key|api_key|apiKey|apikey|token|access_token)=[^&]*/gi, '$1$2=[REDACTED]');
+            result = url.replace(/([?&])(key|api_key|apiKey|apikey|token|access_token)=[^&]*/gi, '$1$2=[REDACTED]');
         }
+        sanitizeUrlCache.set(url, result);
+        return result;
     };
 
     /**
@@ -427,6 +450,33 @@ function configureToolsAndResources(
         onStateChange: (from, to) => logger.warn('Web scraping circuit breaker state change', { from, to }),
     });
 
+    // Read Google API credentials once at startup
+    const GOOGLE_API_KEY = process.env.GOOGLE_CUSTOM_SEARCH_API_KEY!;
+    const GOOGLE_CX = process.env.GOOGLE_CUSTOM_SEARCH_ID!;
+
+    async function fetchGoogleApi<T>(url: string, operation: string): Promise<T> {
+        const resp = await googleSearchCircuit.execute(async () => {
+            const r = await withTimeout(
+                fetch(url, { signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) }),
+                SEARCH_TIMEOUT_MS + 2000, // slightly longer than signal timeout to let it fire first
+                operation
+            );
+            if (!r.ok) throw new Error(`${operation} API error ${r.status}`);
+            return r;
+        });
+        return resp.json() as Promise<T>;
+    }
+
+    function toCitationOutput(citation?: import("./shared/citationExtractor.js").Citation): import("./schemas/outputSchemas.js").CitationOutput | undefined {
+        if (!citation) return undefined;
+        return {
+            metadata: citation.metadata,
+            url: citation.url,
+            accessedDate: citation.accessedDate,
+            formatted: citation.formatted,
+        };
+    }
+
     /** Map user-friendly time range names to Google dateRestrict values */
     const TIME_RANGE_MAP: Record<string, string> = {
         day: 'd1',
@@ -458,8 +508,8 @@ function configureToolsAndResources(
      */
     function buildGoogleSearchUrl(params: GoogleSearchParams): string {
         const urlParams = new URLSearchParams({
-            key: process.env.GOOGLE_CUSTOM_SEARCH_API_KEY!,
-            cx: process.env.GOOGLE_CUSTOM_SEARCH_ID!,
+            key: GOOGLE_API_KEY,
+            cx: GOOGLE_CX,
             q: params.query,
             num: String(params.num_results),
         });
@@ -531,17 +581,7 @@ function configureToolsAndResources(
                 logger.debug(`Cache MISS for googleSearch`, { traceId: params.traceId, ...cacheArgs });
                 const url = buildGoogleSearchUrl(searchParams);
 
-                // Circuit breaker + timeout protection for the search API call
-                const resp = await googleSearchCircuit.execute(async () => {
-                    const r = await withTimeout(
-                        fetch(url, { signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) }),
-                        SEARCH_TIMEOUT_MS,
-                        'Google Search API'
-                    );
-                    if (!r.ok) throw new Error(`Search API error ${r.status}`);
-                    return r;
-                });
-                const data = await resp.json() as GoogleSearchResponse;
+                const data = await fetchGoogleApi<GoogleSearchResponse>(url, 'Google Search');
                 const links: string[] = (data.items || []).map((item) => item.link);
                 return links.map((l) => ({ type: "text" as const, text: l }));
             },
@@ -714,6 +754,8 @@ function configureToolsAndResources(
 
         // Each crawler needs its own Configuration to avoid request queue corruption
         const playwrightStorageDir = `${DEFAULT_CRAWLEE_STORAGE_PATH}/playwright_${randomUUID()}`;
+
+        try {
         const crawlerConfig = new Configuration({
             persistStorage: false,
             storageClientOptions: { localDataDirectory: playwrightStorageDir },
@@ -752,40 +794,28 @@ function configureToolsAndResources(
                 const isGooglePatents = url.includes('patents.google.com');
 
                 if (isGooglePatents) {
-                    // Google Patents loads results via XHR after initial render
-                    // Wait for the search results container to appear
                     logger.debug('Google Patents detected, waiting for results to load', { url: sanitizeUrl(url) });
 
-                    // Wait longer for Google Patents initial load
-                    await page.waitForTimeout(3000);
+                    // Wait for patent results to render (event-driven, not fixed sleep)
+                    await page.waitForSelector(
+                      'search-result-item, .search-result-item, [data-result], state-manager search-results, a[href*="/patent/"]',
+                      { timeout: 12_000 }
+                    ).catch(() => {});
 
-                    // Try to wait for search result items specifically
-                    await Promise.race([
-                        page.waitForSelector('search-result-item, .search-result-item, [data-result], state-manager search-results', { timeout: 10000 }),
-                        page.waitForTimeout(5000)
-                    ]).catch(() => {});
-
-                    // Scroll down to trigger lazy loading of more results
+                    // Scroll to trigger lazy loading, then wait for network to settle
                     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-                    await page.waitForTimeout(2000);
-
-                    // Scroll back up and wait for any additional content
+                    await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
                     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-                    await page.waitForTimeout(1000);
                 } else {
-                    // Standard SPA handling
-                    // Additional wait for dynamic content (SPAs often load data after networkidle)
-                    await page.waitForTimeout(2000);
+                    // Wait for the main content area to render
+                    await page.waitForSelector(
+                      'article, main, [role="main"], .results, .search-results, #results, .content, #content',
+                      { timeout: 8_000 }
+                    ).catch(() => {});
 
-                    // Try to wait for common content indicators
-                    await Promise.race([
-                        page.waitForSelector('article, main, [role="main"], .results, .search-results, #results', { timeout: 5000 }),
-                        page.waitForTimeout(3000)
-                    ]).catch(() => {});
-
-                    // Scroll to trigger any lazy loading
+                    // Scroll to trigger lazy loading, then wait for network to settle
                     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2)).catch(() => {});
-                    await page.waitForTimeout(1000);
+                    await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
                 }
 
                 // Capture raw HTML for citation extraction
@@ -883,15 +913,28 @@ function configureToolsAndResources(
                 userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             },
         }, crawlerConfig);
+        const crawlPromise = crawler.run([{ url }]);
         try {
-            const crawlPromise = crawler.run([{ url }]);
             await withTimeout(crawlPromise, PLAYWRIGHT_TIMEOUT_SECS * 1000, 'Playwright scraping');
         } finally {
-            // Clean up storage dir and ensure browser process is terminated
+            // Tear down first to kill the browser, then wait for the crawl
+            // promise to settle so no Chromium processes are orphaned.
+            await crawler.teardown().catch(() => {});
+            await crawlPromise.catch(() => {});
             fs.rm(playwrightStorageDir, { recursive: true, force: true }).catch(() => {});
-            crawler.teardown().catch(() => {});
         }
         return { content: pageContent, rawHtml, citation };
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (msg.includes('launch browser') || msg.includes('Executable doesn') || msg.includes('browserType.launch')) {
+                logger.error('Playwright browser not installed. Run: npx playwright install chromium');
+                return {
+                    content: '[JavaScript rendering unavailable — Chromium browser is not installed. ' +
+                        'Run "npx playwright install chromium" to enable JS-rendered page scraping.]',
+                };
+            }
+            throw error;
+        }
     }
 
     /**
@@ -1170,16 +1213,7 @@ function configureToolsAndResources(
                 if (docMetaMatch[3]) metadata.title = docMetaMatch[3];
             }
 
-            // Convert Citation to CitationOutput for the response
-            let citation: CitationOutput | undefined;
-            if (result.citation) {
-                citation = {
-                    metadata: result.citation.metadata,
-                    url: result.citation.url,
-                    accessedDate: result.citation.accessedDate,
-                    formatted: result.citation.formatted,
-                };
-            }
+            const citation = toCitationOutput(result.citation);
 
             // Handle preview mode - return metadata without full content
             if (mode === 'preview') {
@@ -1364,21 +1398,21 @@ function configureToolsAndResources(
                 };
             }
 
-            // Scrape each URL in parallel with graceful degradation
-            logger.info('search_and_scrape: scraping', { traceId, count: urls.length });
-            const scrapePromises = urls.map(async (url, index) => {
+            // Scrape URLs with bounded concurrency to avoid memory spikes
+            // from launching too many Playwright/Chromium instances at once.
+            const MAX_SCRAPE_CONCURRENCY = 3;
+            logger.info('search_and_scrape: scraping', { traceId, count: urls.length, concurrency: MAX_SCRAPE_CONCURRENCY });
+            const scrapeResults = await mapWithConcurrency(urls, MAX_SCRAPE_CONCURRENCY, async (url, index) => {
                 try {
                     const result = await withTimeout(scrapePageFn({ url, traceId }), 20000, `Scraping URL ${index + 1}`);
                     logger.debug(`Scraped URL ${index + 1}/${urls.length}`, { traceId, url: sanitizeUrl(url).substring(0, 80) });
-                    return { url, result, success: true };
+                    return { url, result, success: true as const };
                 } catch (error) {
                     const errorMsg = `Failed to scrape ${sanitizeUrl(url)}: ${sanitizeErrorMessage(error instanceof Error ? error.message : String(error))}`;
                     logger.warn(errorMsg, { traceId });
-                    return { url, error: errorMsg, success: false };
+                    return { url, error: errorMsg, success: false as const };
                 }
             });
-
-            const scrapeResults = await Promise.allSettled(scrapePromises);
 
             const successfulScrapes: { url: string; content: string; citation?: Citation }[] = [];
             const allSources: SourceOutput[] = [];
@@ -1429,22 +1463,11 @@ function configureToolsAndResources(
                             citation,
                         });
 
-                        // Convert Citation to CitationOutput for sources
-                        let citationOutput: CitationOutput | undefined;
-                        if (citation) {
-                            citationOutput = {
-                                metadata: citation.metadata,
-                                url: citation.url,
-                                accessedDate: citation.accessedDate,
-                                formatted: citation.formatted,
-                            };
-                        }
-
                         allSources.push({
                             url: result.value.url,
                             success: true,
                             contentLength: content.length,
-                            citation: citationOutput,
+                            citation: toCitationOutput(citation),
                         });
                     } else {
                         errors.push(result.value.error);
@@ -1464,26 +1487,24 @@ function configureToolsAndResources(
                 }
             });
 
-            // Apply quality scoring to successful sources
+            // Apply quality scoring — use a Map for O(1) lookup instead of O(n) find
+            const sourceByUrl = new Map(allSources.map(s => [s.url, s]));
             for (const scrape of successfulScrapes) {
-                const source = allSources.find(s => s.url === scrape.url);
-                if (source && source.success) {
-                    const qualityScores = scoreSource(
+                const source = sourceByUrl.get(scrape.url);
+                if (source?.success) {
+                    source.qualityScore = scoreSource(
                         scrape.url,
                         scrape.content,
                         trimmedQuery,
                         source.citation?.metadata.publishedDate
-                    );
-                    source.qualityScore = qualityScores.overall;
+                    ).overall;
                 }
             }
 
             // Sort successful scrapes by quality score for better content ordering
-            successfulScrapes.sort((a, b) => {
-                const scoreA = allSources.find(s => s.url === a.url)?.qualityScore ?? 0;
-                const scoreB = allSources.find(s => s.url === b.url)?.qualityScore ?? 0;
-                return scoreB - scoreA;
-            });
+            successfulScrapes.sort((a, b) =>
+                (sourceByUrl.get(b.url)?.qualityScore ?? 0) - (sourceByUrl.get(a.url)?.qualityScore ?? 0)
+            );
 
             logger.info('search_and_scrape: scraping done', { traceId, successful: successfulScrapes.length, total: urls.length });
 
@@ -1650,8 +1671,8 @@ function configureToolsAndResources(
      */
     function buildGoogleImageSearchUrl(params: GoogleImageSearchParams): string {
         const urlParams = new URLSearchParams({
-            key: process.env.GOOGLE_CUSTOM_SEARCH_API_KEY!,
-            cx: process.env.GOOGLE_CUSTOM_SEARCH_ID!,
+            key: GOOGLE_API_KEY,
+            cx: GOOGLE_CX,
             q: params.query,
             num: String(params.num_results),
             searchType: 'image',
@@ -1734,19 +1755,7 @@ function configureToolsAndResources(
             });
 
             try {
-                const resp = await googleSearchCircuit.execute(async () => {
-                    const r = await withTimeout(
-                        fetch(url, { signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) }),
-                        SEARCH_TIMEOUT_MS,
-                        'Google Image Search API'
-                    );
-                    if (!r.ok) {
-                        throw new Error(`Image Search API error ${r.status}`);
-                    }
-                    return r;
-                });
-
-                const data = await resp.json() as {
+                const data = await fetchGoogleApi<{
                     items?: Array<{
                         title: string;
                         link: string;
@@ -1759,7 +1768,7 @@ function configureToolsAndResources(
                             byteSize?: number;
                         };
                     }>;
-                };
+                }>(url, 'Google Image Search');
 
                 const images: ImageResultOutput[] = (data.items || []).map((item) => ({
                     title: item.title,
@@ -1835,8 +1844,8 @@ function configureToolsAndResources(
      */
     function buildGoogleNewsSearchUrl(params: GoogleNewsSearchParams): string {
         const urlParams = new URLSearchParams({
-            key: process.env.GOOGLE_CUSTOM_SEARCH_API_KEY!,
-            cx: process.env.GOOGLE_CUSTOM_SEARCH_ID!,
+            key: GOOGLE_API_KEY,
+            cx: GOOGLE_CX,
             q: params.query,
             num: String(params.num_results),
             dateRestrict: NEWS_FRESHNESS_MAP[params.freshness] || 'w1',
@@ -1917,19 +1926,7 @@ function configureToolsAndResources(
             });
 
             try {
-                const resp = await googleSearchCircuit.execute(async () => {
-                    const r = await withTimeout(
-                        fetch(url, { signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) }),
-                        SEARCH_TIMEOUT_MS,
-                        'Google News Search API'
-                    );
-                    if (!r.ok) {
-                        throw new Error(`News Search API error ${r.status}`);
-                    }
-                    return r;
-                });
-
-                const data = await resp.json() as {
+                const data = await fetchGoogleApi<{
                     items?: Array<{
                         title: string;
                         link: string;
@@ -1942,7 +1939,7 @@ function configureToolsAndResources(
                             }>;
                         };
                     }>;
-                };
+                }>(url, 'Google News Search');
 
                 const articles: NewsResultOutput[] = (data.items || []).map((item) => ({
                     title: item.title,
@@ -2649,65 +2646,6 @@ app.get("/mcp/oauth-token-info",
   });
 });
 
-/**
- * Shutdown handler for graceful cache persistence
- *
- * Ensures cache data is written to disk when the server is terminated
- * with SIGINT (Ctrl+C) or SIGTERM. This prevents data loss during shutdown.
- */
-let isShuttingDown = false;
-async function gracefulShutdown(signal: string) {
-    if (isShuttingDown) {
-        logger.debug(`Shutdown already in progress, ignoring ${signal}`);
-        return;
-    }
-    isShuttingDown = true;
-    logger.info(`Received ${signal}. Closing transports and persisting data before exit...`);
-    try {
-        if (stdioTransportInstance && typeof stdioTransportInstance.close === 'function') {
-          await stdioTransportInstance.close();
-          logger.info('STDIO transport closed.');
-        }
-        if (httpTransportInstance && typeof httpTransportInstance.close === 'function') {
-          await httpTransportInstance.close();
-          logger.info('HTTP transport closed.');
-        }
-        if (httpServerInstance) {
-          await new Promise<void>((resolve) => {
-            httpServerInstance!.close(() => resolve());
-            // Force-close lingering connections after 3s
-            setTimeout(() => resolve(), 3000).unref();
-          });
-          logger.info('HTTP server closed.');
-        }
-
-        if (globalCacheInstance && typeof globalCacheInstance.dispose === 'function') {
-          await globalCacheInstance.dispose();
-        } else {
-          logger.warn('globalCacheInstance dispose method not found or cache not available.');
-        }
-
-        if (eventStoreInstance && typeof eventStoreInstance.dispose === 'function') {
-            await eventStoreInstance.dispose();
-        } else {
-          logger.warn('eventStoreInstance dispose method not found or event store not available.');
-        }
-    } catch (error) {
-        logger.error('Error during graceful shutdown', { error: String(error) });
-    }
-    process.exit(0);
-}
-
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-// ─── 5️⃣ HTTP SERVER STARTUP ────────────────────────────────────────────────────
-/**
- * Start the HTTP server on the configured port
- *
- * Binds to IPv6 ANY address (::) which also accepts IPv4 connections
- * on dual-stack systems. Logs available endpoints for easy access.
- */
   // Return the app and the created HTTP transport instance
   return { app, httpTransport: httpTransportInstance };
 }
@@ -2734,6 +2672,40 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason) => {
   process.stderr.write(`[ERROR] Unhandled promise rejection: ${reason instanceof Error ? reason.stack : reason}\n`);
 });
+
+// --- Unified Graceful Shutdown ---
+// Single shutdown path for all signals: SIGINT, SIGTERM, and stdin EOF
+// (parent MCP client exit). One flag prevents double-dispose races.
+let isShuttingDown = false;
+async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  logger.info(`Received ${signal}. Shutting down...`);
+
+  const forceExitTimer = setTimeout(() => process.exit(0), 5000);
+  forceExitTimer.unref();
+
+  try {
+    if (stdioTransportInstance?.close) await stdioTransportInstance.close();
+    if (httpTransportInstance?.close) await httpTransportInstance.close();
+    if (httpServerInstance) {
+      await new Promise<void>((resolve) => {
+        httpServerInstance!.close(() => resolve());
+        setTimeout(() => resolve(), 3000).unref();
+      });
+    }
+    if (globalCacheInstance?.dispose) await globalCacheInstance.dispose();
+    if (eventStoreInstance?.dispose) await eventStoreInstance.dispose();
+  } catch (error) {
+    logger.error('Error during shutdown', { error: String(error) });
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.stdin.on('end', () => gracefulShutdown('stdin-end'));
+process.stdin.on('close', () => gracefulShutdown('stdin-close'));
 
 // --- Main Execution Block ---
 /**

@@ -81,11 +81,10 @@ export function isDocumentUrl(url: string): boolean {
 async function fetchDocument(
   url: string,
   options: DocumentParseOptions
-): Promise<{ buffer: ArrayBuffer; contentType?: string }> {
+): Promise<{ buffer: Buffer; contentType?: string }> {
   const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
 
-  // SSRF protection: validate URL and every redirect hop
   const response = await ssrfSafeFetch(url, {}, {
     signal: AbortSignal.timeout(timeout),
     headers: {
@@ -97,18 +96,37 @@ async function fetchDocument(
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
 
-  // Check Content-Length if available
+  // Check Content-Length if available (pre-download guard)
   const contentLength = response.headers.get('Content-Length');
   if (contentLength && parseInt(contentLength, 10) > maxFileSize) {
     throw new Error(`File too large: ${contentLength} bytes exceeds ${maxFileSize} byte limit`);
   }
 
-  const buffer = await response.arrayBuffer();
-
-  // Double-check actual size
-  if (buffer.byteLength > maxFileSize) {
-    throw new Error(`File too large: ${buffer.byteLength} bytes exceeds ${maxFileSize} byte limit`);
+  // Stream the body with a size limit to avoid OOM on large responses
+  // that don't declare Content-Length
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Response body is not readable');
   }
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxFileSize) {
+        throw new Error(`File too large: exceeds ${maxFileSize} byte limit`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  // Single Buffer allocation from chunks (avoids double-copy)
+  const buffer = Buffer.concat(chunks, totalBytes);
 
   return {
     buffer,
@@ -145,7 +163,7 @@ async function parsePdf(buffer: Buffer): Promise<{ text: string; metadata: Docum
       },
     };
   } finally {
-    await parser.destroy();
+    await parser.destroy().catch(() => {});
   }
 }
 
@@ -223,9 +241,8 @@ export async function parseDocument(
   const startTime = Date.now();
 
   try {
-    // Fetch the document
-    const { buffer, contentType } = await fetchDocument(url, options);
-    const nodeBuffer = Buffer.from(buffer);
+    // Fetch the document (returns Buffer directly — no double copy)
+    const { buffer: nodeBuffer, contentType } = await fetchDocument(url, options);
 
     // Detect document type
     const documentType = detectDocumentType(url, contentType);
@@ -243,7 +260,7 @@ export async function parseDocument(
 
     // Parse based on type
     let text: string;
-    let metadata: DocumentMetadata = { fileSize: buffer.byteLength };
+    let metadata: DocumentMetadata = { fileSize: nodeBuffer.byteLength };
 
     try {
       switch (documentType) {

@@ -132,7 +132,7 @@ Use the same JSON configuration above in your MCP settings.
 
 ```bash
 git clone https://github.com/zoharbabin/google-researcher-mcp.git && cd google-researcher-mcp
-npm install && npx playwright install chromium
+npm install            # Installs deps + Chromium browser automatically
 cp .env.example .env   # Then add your Google API keys to .env
 npm run dev            # Server is now running on STDIO transport
 ```
@@ -424,7 +424,7 @@ For a detailed explanation, see the [Architecture Guide](./docs/architecture/arc
 - **Google API Keys**:
   - [Custom Search API Key](https://developers.google.com/custom-search/v1/introduction)
   - [Custom Search Engine ID](https://programmablesearchengine.google.com/)
-- **Chromium** (for JavaScript rendering): Installed automatically via `npx playwright install chromium`
+- **Chromium** (for JavaScript rendering): Installed automatically during `npm install` via postinstall hook
 - **OAuth 2.1 Provider** (HTTP transport only): An external authorization server (e.g., Auth0, Okta) to issue JWTs. Not needed for STDIO.
 
 ### Installation & Setup
@@ -435,10 +435,9 @@ For a detailed explanation, see the [Architecture Guide](./docs/architecture/arc
     cd google-researcher-mcp
     ```
 
-2.  **Install Dependencies**:
+2.  **Install Dependencies** (includes Chromium browser automatically):
     ```bash
     npm install
-    npx playwright install chromium
     ```
 
 3.  **Configure Environment Variables**:
@@ -719,13 +718,13 @@ This opens a browser interface at `http://localhost:5173` connected to the serve
 - **"Cannot find module" error**: Run `npm run build` first — Inspector requires compiled JavaScript.
 - **Tool calls fail with API errors**: Ensure `GOOGLE_CUSTOM_SEARCH_API_KEY` and `GOOGLE_CUSTOM_SEARCH_ID` are set in your `.env` file.
 - **Port 5173 in use**: The Inspector UI runs on port 5173. Stop other services using that port or check if another Inspector instance is running.
-- **Server crashes on startup**: Check that all dependencies are installed (`npm install`) and Playwright is set up (`npx playwright install chromium`).
+- **Server crashes on startup**: Check that all dependencies are installed (`npm install`). Chromium is installed automatically via the postinstall hook.
 
 ## Troubleshooting
 
 - **Server won't start**: Ensure `GOOGLE_CUSTOM_SEARCH_API_KEY` and `GOOGLE_CUSTOM_SEARCH_ID` are set in `.env`. The server exits with a clear error if either is missing.
 - **Empty scrape results**: The persistent cache may contain stale entries. Delete `storage/persistent_cache/namespaces/scrapePage/` and restart to force fresh scrapes.
-- **Playwright/Chromium errors**: Re-run `npx playwright install chromium`. On Linux, also run `npx playwright install-deps chromium` for system dependencies. In Docker, these are pre-installed.
+- **Playwright/Chromium errors**: Chromium is installed automatically during `npm install`. If it failed, re-run `npx playwright install chromium`. On Linux, also run `npx playwright install-deps chromium` for system dependencies. In Docker, these are pre-installed. If the browser is missing at runtime, scrape_page returns a clear error message instead of crashing.
 - **Port 3000 in use**: Stop the other process (`lsof -ti:3000 | xargs kill`) or set `PORT=3001 npm start`.
 - **YouTube transcripts fail**: Some videos have transcripts disabled by the owner. The error message includes the specific reason (e.g., `TRANSCRIPT_DISABLED`, `VIDEO_UNAVAILABLE`). See the [YouTube Transcript Documentation](./docs/youtube-transcript-extraction.md) for all error codes.
 - **Cache issues**: Use `/mcp/cache-stats` to inspect cache health, or `/mcp/cache-persist` to force a save. See the [Management API](#management-api).

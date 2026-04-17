@@ -46,6 +46,8 @@ graph TD
 -   **Description**: The main class that implements the `EventStore` interface required by the MCP SDK's `StreamableHTTPServerTransport`. It orchestrates the storage and retrieval of events.
 -   **Key Responsibilities**:
     -   Managing an in-memory `Map` of recent events for fast access.
+    -   Maintaining a **per-stream index** (`Map<string, Set<string>>`) for O(k) stream lookups instead of O(n) full scans.
+    -   Tracking estimated memory usage without expensive serialization.
     -   Generating unique, chronologically sortable event IDs.
     -   Enforcing limits on the number of events stored (per-stream and globally) to prevent memory exhaustion.
     -   Handling event expiration (TTL).
@@ -75,8 +77,8 @@ graph TD
 
 1.  A client reconnects to the HTTP/SSE endpoint, providing the `lastEventId` it successfully received.
 2.  The transport calls `eventStore.replayEventsAfter(lastEventId)`.
-3.  The `PersistentEventStore` first searches its in-memory `Map` for all events belonging to that stream that occurred after `lastEventId`.
-4.  If the `lastEventId` is too old to be in memory, it asks the `EventPersistenceManager` to load the relevant event stream from disk.
+3.  The `PersistentEventStore` uses the **per-stream index** to look up only events belonging to that stream (O(k) where k is the stream size), rather than scanning all events.
+4.  If the `lastEventId` is not in memory, it asks the `EventPersistenceManager` to load it from disk and rebuilds the stream index entry.
 5.  Once the full sequence of missed events is gathered, they are sent back to the client in the correct order.
 
 ## Configuration and Usage

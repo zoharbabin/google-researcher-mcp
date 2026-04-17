@@ -1,4 +1,28 @@
 // jest.setup.js
+
+// Polyfill browser globals required by pdfjs-dist (used transitively by pdf-parse)
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  globalThis.DOMMatrix = class DOMMatrix {
+    constructor() { this.m = new Float64Array(16); this.m[0] = this.m[5] = this.m[10] = this.m[15] = 1; }
+    get a() { return this.m[0]; }
+    get b() { return this.m[1]; }
+    get c() { return this.m[4]; }
+    get d() { return this.m[5]; }
+    get e() { return this.m[12]; }
+    get f() { return this.m[13]; }
+    isIdentity = true;
+    is2D = true;
+    inverse() { return new DOMMatrix(); }
+    multiply() { return new DOMMatrix(); }
+    scale() { return new DOMMatrix(); }
+    translate() { return new DOMMatrix(); }
+    transformPoint(p) { return p; }
+  };
+}
+if (typeof globalThis.Path2D === 'undefined') {
+  globalThis.Path2D = class Path2D { constructor() {} };
+}
+
 import { jest, afterAll, afterEach, beforeEach, beforeAll } from '@jest/globals';
 import { cleanupStaleLocks, cleanupAllTestStorage, cleanupOpenHandles } from './src/shared/testCleanup.js';
 

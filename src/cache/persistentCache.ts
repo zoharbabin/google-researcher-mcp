@@ -704,18 +704,26 @@ export class PersistentCache extends Cache {
    * @returns A promise that resolves when the cache is persisted
    */
   async persistToDisk(): Promise<void> {
-    // Check dirty flag first
-    if (!this.isDirty) {
-      return;
-    }
+    if (!this.isDirty) return;
 
     try {
-      // Immediately mark as not dirty to prevent race conditions with timer
       this.isDirty = false;
 
-      // Perform the actual save
-      await this.persistenceManager.saveAllEntries(this.namespaceCache);
+      // Filter out expired entries before persisting to avoid wasting I/O
+      const now = this.now();
+      const filtered = new Map<string, Map<string, CacheEntry<any>>>();
+      for (const [ns, entries] of this.namespaceCache) {
+        const live = new Map<string, CacheEntry<any>>();
+        for (const [key, entry] of entries) {
+          if (entry.expiresAt > now) live.set(key, entry);
+        }
+        if (live.size > 0) filtered.set(ns, live);
+      }
+
+      await this.persistenceManager.saveAllEntries(filtered);
     } catch (error) {
+      // Restore dirty flag so next cycle retries
+      this.isDirty = true;
       try {
         logger.error('Error persisting cache to disk', { error: error instanceof Error ? error.message : String(error) });
       } catch (_) {
