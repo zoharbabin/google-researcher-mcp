@@ -15,7 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Memory Optimization — Lazy PlaywrightCrawler**: `PlaywrightCrawler` is now dynamically imported on first JS-rendered scrape instead of at startup — saves ~30-50 MB for sessions that never need JS rendering
 - **Memory Optimization — Lazy Document Parsers**: pdf-parse, mammoth, and jszip are now dynamically imported inside their respective parse functions instead of at module load — saves ~74 MB RSS
 - **Memory Optimization — Lazy HTTP Dependencies**: express, cors, and express-rate-limit are now dynamically imported inside `createAppAndHttpTransport()` — saves ~24 MB in STDIO mode
-- **PID Lock File**: Server now writes a PID lock file (`storage/.server.pid`) on startup and sends SIGTERM to stale processes, preventing orphan instance accumulation across MCP client reconnections
 - **Stdin Health Check**: Periodic check (every 5s) detects destroyed or ended stdin as a safety net for parent process death beyond the existing `end`/`close` event listeners
 - **Bounded sanitizeUrlCache**: URL sanitization cache is now capped at 500 entries with FIFO eviction to prevent unbounded memory growth over long sessions
 - **Event Store Lazy Loading**: Event store `eagerLoading` set to `false` — events are loaded on demand instead of all at startup, reducing memory for STDIO sessions that don't use HTTP reconnection
