@@ -351,10 +351,9 @@ The server uses a **single unified shutdown handler** that responds to `SIGINT`,
 4. Exits the process.
 
 ### Orphan Process Prevention
-Multiple layers prevent orphaned processes from accumulating:
-1. **PID lock file** (`storage/.server.pid`): On startup, the server checks for a stale PID lock and sends SIGTERM to any orphaned instance before writing its own PID. The lock is cleaned up on graceful shutdown.
-2. **Stdin EOF detection**: When the parent process (Claude Code, Claude Desktop) terminates, the server detects stdin `end`/`close` events and triggers graceful shutdown.
-3. **Stdin health check**: A periodic check (every 5s) detects destroyed or ended stdin as a safety net for cases where the parent dies without cleanly closing the pipe.
+Two layers prevent orphaned processes from accumulating:
+1. **Stdin EOF detection**: When the parent process (Claude Code, Claude Desktop) terminates, the server detects stdin `end`/`close` events and triggers graceful shutdown.
+2. **Stdin health check**: A periodic check (every 5s) detects destroyed or ended stdin as a safety net for cases where the parent dies without cleanly closing the pipe.
 
 ### Startup Cleanup
 On initialization, the server sweeps the crawlee storage directory for orphaned temp directories (`cheerio_*`, `playwright_*`) left by previous crashes.

@@ -251,41 +251,6 @@ const PKG_VERSION: string = (() => {
 const DEFAULT_CACHE_PATH = path.resolve(PROJECT_ROOT, 'storage', 'persistent_cache');
 const DEFAULT_EVENT_PATH = path.resolve(PROJECT_ROOT, 'storage', 'event_store');
 const DEFAULT_CRAWLEE_STORAGE_PATH = path.resolve(PROJECT_ROOT, 'storage', 'crawlee');
-const PID_LOCK_PATH = path.resolve(PROJECT_ROOT, 'storage', '.server.pid');
-
-// --- PID Lock (prevents orphan instance accumulation) ---
-async function acquirePidLock(): Promise<void> {
-  try {
-    await fs.mkdir(path.dirname(PID_LOCK_PATH), { recursive: true });
-    const existing = await fs.readFile(PID_LOCK_PATH, 'utf8').catch(() => null);
-    if (existing) {
-      const pid = parseInt(existing.trim(), 10);
-      if (!isNaN(pid) && pid !== process.pid) {
-        try {
-          process.kill(pid, 0); // check if alive
-          process.kill(pid, 'SIGTERM');
-          logger.info(`Sent SIGTERM to orphaned server process ${pid}`);
-          await new Promise(r => setTimeout(r, 1500));
-        } catch {
-          // process already dead — stale lock
-        }
-      }
-    }
-    await fs.writeFile(PID_LOCK_PATH, String(process.pid), 'utf8');
-  } catch (error) {
-    logger.warn('Failed to acquire PID lock', { error: String(error) });
-  }
-}
-
-async function releasePidLock(): Promise<void> {
-  try {
-    const content = await fs.readFile(PID_LOCK_PATH, 'utf8').catch(() => '');
-    if (content.trim() === String(process.pid)) {
-      await fs.unlink(PID_LOCK_PATH);
-    }
-  } catch { /* best-effort */ }
-}
-
 // --- Global Instances ---
 // Initialize Cache and Event Store globally so they are available for both transports
 let globalCacheInstance: PersistentCache;
@@ -2750,7 +2715,6 @@ async function gracefulShutdown(signal: string) {
     }
     if (globalCacheInstance?.dispose) await globalCacheInstance.dispose();
     if (eventStoreInstance?.dispose) await eventStoreInstance.dispose();
-    await releasePidLock();
   } catch (error) {
     logger.error('Error during shutdown', { error: String(error) });
   }
@@ -2768,11 +2732,6 @@ process.stdin.on('close', () => gracefulShutdown('stdin-close'));
  * based on execution context (direct run vs. import) and environment variables.
  */
 (async () => {
-  // Prevent orphan instance accumulation: kill any stale server process
-  if (!process.env.JEST_WORKER_ID) {
-    await acquirePidLock();
-  }
-
   // Initialize global instances (cache, event store, etc.).
   // Defer the expensive eager-load of the persistent cache so the STDIO
   // transport can be established first — the MCP client needs a responsive
