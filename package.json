@@ -1,7 +1,7 @@
 {
   "name": "google-researcher-mcp",
   "mcpName": "io.github.zoharbabin/google-researcher",
-  "version": "6.2.0",
+  "version": "6.2.1",
   "description": "An MCP server providing Google Search, web scraping, and multi-source research tools for AI assistants.",
   "author": {
     "name": "Zohar Babin",

@@ -265,7 +265,7 @@ async function acquirePidLock(): Promise<void> {
           process.kill(pid, 0); // check if alive
           process.kill(pid, 'SIGTERM');
           logger.info(`Sent SIGTERM to orphaned server process ${pid}`);
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 300));
         } catch {
           // process already dead — stale lock
         }
@@ -2768,16 +2768,14 @@ process.stdin.on('close', () => gracefulShutdown('stdin-close'));
  * based on execution context (direct run vs. import) and environment variables.
  */
 (async () => {
-  // Prevent orphan instance accumulation: kill any stale server process
-  if (!process.env.JEST_WORKER_ID) {
-    await acquirePidLock();
-  }
-
-  // Initialize global instances (cache, event store, etc.).
-  // Defer the expensive eager-load of the persistent cache so the STDIO
-  // transport can be established first — the MCP client needs a responsive
-  // connection immediately, while the cache can warm in the background.
-  await initializeGlobalInstances();
+  // Run PID lock acquisition concurrently with instance initialization.
+  // The PID lock can take up to ~300ms if killing an orphan, and initializeGlobalInstances
+  // creates storage dirs + cache/event-store objects. Running them in parallel shaves
+  // startup time so the STDIO transport connects before Claude Code's timeout.
+  const pidLockPromise = !process.env.JEST_WORKER_ID
+    ? acquirePidLock()
+    : Promise.resolve();
+  await Promise.all([pidLockPromise, initializeGlobalInstances()]);
 
   // Setup STDIO transport BEFORE the cache finishes loading. This ensures
   // the MCP client can connect and start exchanging messages right away.
