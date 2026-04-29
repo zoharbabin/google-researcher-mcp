@@ -8,6 +8,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![Tests](https://github.com/zoharbabin/google-researcher-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/zoharbabin/google-researcher-mcp/actions)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
+[![SafeSkill 85/100](https://img.shields.io/badge/SafeSkill-85%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/zoharbabin-google-researcher-mcp)
 
 > Professional research tools for AI assistants - Google Search, web scraping, academic papers, patents, and more
 
