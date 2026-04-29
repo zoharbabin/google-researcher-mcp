@@ -21,7 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, fstatSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -2723,8 +2723,6 @@ async function gracefulShutdown(signal: string) {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.stdin.on('end', () => gracefulShutdown('stdin-end'));
-process.stdin.on('close', () => gracefulShutdown('stdin-close'));
 
 // --- Main Execution Block ---
 /**
@@ -2740,33 +2738,45 @@ process.stdin.on('close', () => gracefulShutdown('stdin-close'));
   if (!process.env.JEST_WORKER_ID) {
     await setupStdioTransport();
 
-    // Safety net: detect parent process death.
+    // Shut down on stdin EOF only when stdin is a pipe or socket (real MCP client).
+    // In HTTP mode the process is typically backgrounded (`npm start &`),
+    // so stdin is /dev/null (character device) — EOF is immediate and expected.
+    let stdinIsClientPipe = false;
+    try { const s = fstatSync(0); stdinIsClientPipe = s.isFIFO() || s.isSocket(); } catch {}
+    if (stdinIsClientPipe || process.env.MCP_TEST_MODE === 'stdio') {
+      process.stdin.on('end', () => gracefulShutdown('stdin-end'));
+      process.stdin.on('close', () => gracefulShutdown('stdin-close'));
+    }
+
+    // Safety net: detect parent process death (STDIO mode only).
+    // In HTTP mode the server is long-lived and parent exit is normal.
     // When Claude Code spawns the server, stdin/stdout are unix domain sockets,
     // not pipes. If the parent dies, these sockets break but Node.js does NOT
     // emit 'end'/'close' on stdin, and destroyed/readableEnded stay false.
     // This causes orphaned processes to spin at 100% CPU on a broken socket.
     // Detection: (1) parent PID becomes 1 (reparented to init/launchd),
     // (2) stdin.destroyed/readableEnded flags, (3) stdout write fails with EPIPE.
-    const originalParentPid = process.ppid;
-    const stdinHealthCheck = setInterval(() => {
-      const reparented = process.ppid !== originalParentPid;
-      const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
-      if (reparented || stdinBroken) {
-        clearInterval(stdinHealthCheck);
-        gracefulShutdown(reparented ? 'parent-exit' : 'stdin-health-check');
-        return;
-      }
-      // Probe stdout: if the socket's remote end is gone, this triggers EPIPE
-      if (!process.stdout.destroyed) {
-        process.stdout.write('', (err) => {
-          if (err) {
-            clearInterval(stdinHealthCheck);
-            gracefulShutdown('stdout-broken');
-          }
-        });
-      }
-    }, 2000);
-    stdinHealthCheck.unref();
+    if (stdinIsClientPipe || process.env.MCP_TEST_MODE === 'stdio') {
+      const originalParentPid = process.ppid;
+      const stdinHealthCheck = setInterval(() => {
+        const reparented = process.ppid !== originalParentPid;
+        const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
+        if (reparented || stdinBroken) {
+          clearInterval(stdinHealthCheck);
+          gracefulShutdown(reparented ? 'parent-exit' : 'stdin-health-check');
+          return;
+        }
+        if (!process.stdout.destroyed) {
+          process.stdout.write('', (err) => {
+            if (err) {
+              clearInterval(stdinHealthCheck);
+              gracefulShutdown('stdout-broken');
+            }
+          });
+        }
+      }, 2000);
+      stdinHealthCheck.unref();
+    }
   }
 
   // Now load the cache in the background — this can take many seconds for

@@ -49,7 +49,17 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "⏳ Waiting for server to be ready..."
-sleep 10
+for i in $(seq 1 30); do
+  if curl -sf http://localhost:3000/mcp -o /dev/null 2>/dev/null; then
+    echo "✅ Server is listening (after ${i}s)"
+    break
+  fi
+  if ! kill -0 $SERVER_PID 2>/dev/null; then
+    echo "❌ Server exited before becoming ready"
+    exit 1
+  fi
+  sleep 1
+done
 
 echo "🧪 Running HTTP transport test with timeout protection..."
 # Run the test with a timeout to prevent hanging
