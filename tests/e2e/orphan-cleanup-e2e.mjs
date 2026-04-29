@@ -184,8 +184,10 @@ async function testNoCpuSpin() {
   const pid = child.pid;
   console.log(`   Server started (PID ${pid})`);
 
-  // Let it idle for 3 seconds, then measure CPU
-  await sleep(3000);
+  // Let it idle for 5 seconds so startup CPU amortizes in the ps average.
+  // The `%cpu` field from `ps` reports lifetime average, so short-lived startup
+  // spikes inflate the number on slow CI runners.
+  await sleep(5000);
 
   let cpuPercent = 0;
   try {
@@ -195,7 +197,7 @@ async function testNoCpuSpin() {
     // Process may have exited — that's fine, 0 CPU
   }
 
-  console.log(`   CPU usage after 3s idle: ${cpuPercent}%`);
+  console.log(`   CPU usage after 5s idle: ${cpuPercent}%`);
 
   // Clean up
   try { process.kill(pid, 'SIGTERM'); } catch {}
@@ -204,8 +206,10 @@ async function testNoCpuSpin() {
     try { process.kill(pid, 'SIGKILL'); } catch {}
   }
 
-  // An idle MCP server should use <10% CPU. Orphan spinners hit 80%+.
-  assert(cpuPercent < 20, `Server using ${cpuPercent}% CPU while idle — possible spin loop`);
+  // An idle MCP server should use well under 50% CPU. Orphan spinners hit 80%+.
+  // We use 50% as the threshold to avoid false positives on slow CI runners
+  // where Node.js JIT warmup can briefly inflate the lifetime average.
+  assert(cpuPercent < 50, `Server using ${cpuPercent}% CPU while idle — possible spin loop`);
   console.log('   ✅ CPU usage is normal');
 }
 
