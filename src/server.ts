@@ -257,20 +257,24 @@ const PID_LOCK_PATH = path.resolve(PROJECT_ROOT, 'storage', '.server.pid');
 async function acquirePidLock(): Promise<void> {
   try {
     await fs.mkdir(path.dirname(PID_LOCK_PATH), { recursive: true });
-    const existing = await fs.readFile(PID_LOCK_PATH, 'utf8').catch(() => null);
-    if (existing) {
-      const pid = parseInt(existing.trim(), 10);
-      if (!isNaN(pid) && pid !== process.pid) {
-        try {
-          process.kill(pid, 0); // check if alive
-          process.kill(pid, 'SIGTERM');
-          logger.info(`Sent SIGTERM to orphaned server process ${pid}`);
-          await new Promise(r => setTimeout(r, 300));
-        } catch {
-          // process already dead — stale lock
+
+    // Kill ALL other running instances of this server, not just the one in the lock file.
+    // Claude Code may spawn multiple instances simultaneously (e.g., MCP reconnects
+    // while the old process is still alive), so a single-PID lock is insufficient.
+    try {
+      const { execSync } = await import('child_process');
+      const ps = execSync('pgrep -f "google-researcher-mcp/dist/server.js"', { encoding: 'utf8', timeout: 3000 }).trim();
+      for (const line of ps.split('\n')) {
+        const pid = parseInt(line.trim(), 10);
+        if (!isNaN(pid) && pid !== process.pid) {
+          try {
+            process.kill(pid, 'SIGTERM');
+            logger.info(`Sent SIGTERM to stale server process ${pid}`);
+          } catch { /* already dead */ }
         }
       }
-    }
+    } catch { /* pgrep returns exit 1 if no matches — expected on first launch */ }
+
     await fs.writeFile(PID_LOCK_PATH, String(process.pid), 'utf8');
   } catch (error) {
     logger.warn('Failed to acquire PID lock', { error: String(error) });
@@ -2783,13 +2787,32 @@ process.stdin.on('close', () => gracefulShutdown('stdin-close'));
   if (!process.env.JEST_WORKER_ID) {
     await setupStdioTransport();
 
-    // Safety net: detect parent process death even if stdin doesn't emit end/close
+    // Safety net: detect parent process death.
+    // When Claude Code spawns the server, stdin/stdout are unix domain sockets,
+    // not pipes. If the parent dies, these sockets break but Node.js does NOT
+    // emit 'end'/'close' on stdin, and destroyed/readableEnded stay false.
+    // This causes orphaned processes to spin at 100% CPU on a broken socket.
+    // Detection: (1) parent PID becomes 1 (reparented to init/launchd),
+    // (2) stdin.destroyed/readableEnded flags, (3) stdout write fails with EPIPE.
+    const originalParentPid = process.ppid;
     const stdinHealthCheck = setInterval(() => {
-      if (process.stdin.destroyed || process.stdin.readableEnded) {
+      const reparented = process.ppid !== originalParentPid;
+      const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
+      if (reparented || stdinBroken) {
         clearInterval(stdinHealthCheck);
-        gracefulShutdown('stdin-health-check');
+        gracefulShutdown(reparented ? 'parent-exit' : 'stdin-health-check');
+        return;
       }
-    }, 5000);
+      // Probe stdout: if the socket's remote end is gone, this triggers EPIPE
+      if (!process.stdout.destroyed) {
+        process.stdout.write('', (err) => {
+          if (err) {
+            clearInterval(stdinHealthCheck);
+            gracefulShutdown('stdout-broken');
+          }
+        });
+      }
+    }, 2000);
     stdinHealthCheck.unref();
   }
 

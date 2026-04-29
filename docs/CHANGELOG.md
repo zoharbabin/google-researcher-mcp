@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.2] - 2026-04-28
+
+### Fixed
+- **Orphan Process CPU Spin**: When Claude Code uses unix domain sockets (not pipes) for stdin/stdout, orphaned server processes would spin at 80-100% CPU indefinitely because Node.js never emits `end`/`close` on broken unix sockets. Added three-layer detection: parent PID reparenting check (`process.ppid`), stdin state flags, and stdout EPIPE probe — checked every 2 seconds
+- **Multi-Instance Cleanup**: Replaced single-PID lock file with `pgrep`-based cleanup that kills ALL stale server instances on startup, not just the one recorded in the lock file
+
+### Added
+- **Orphan Prevention E2E Test**: Automated test suite (`npm run test:e2e:orphan`) verifying parent-exit cleanup, multi-instance dedup, no CPU spin, and no leaked processes — runs in CI on every push
+
 ## [6.2.1] - 2026-04-28
 
 ### Fixed
