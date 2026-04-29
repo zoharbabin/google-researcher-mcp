@@ -35,6 +35,9 @@ const INIT_MSG = JSON.stringify({
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Track all spawned children so we can reap them properly (avoid zombies)
+const trackedChildren = new Set();
+
 function countServerProcesses() {
   try {
     const out = execSync('pgrep -f "google-researcher-mcp/dist/server.js"', {
@@ -56,11 +59,37 @@ function killAllServers() {
   } catch { /* none running */ }
 }
 
+function waitForExit(child, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null) { resolve(); return; }
+    const timer = setTimeout(resolve, timeoutMs);
+    child.on('exit', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+async function killAndReap(child) {
+  try { child.kill('SIGKILL'); } catch {}
+  await waitForExit(child, 3000);
+}
+
+async function reapAllTracked() {
+  const promises = [];
+  for (const child of trackedChildren) {
+    try { child.kill('SIGKILL'); } catch {}
+    promises.push(waitForExit(child, 3000));
+  }
+  await Promise.all(promises);
+  trackedChildren.clear();
+}
+
 function spawnServer() {
-  return spawn(NODE, ['--no-warnings', SERVER_JS], {
+  const child = spawn(NODE, ['--no-warnings', SERVER_JS], {
     env: ENV,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+  trackedChildren.add(child);
+  child.on('exit', () => trackedChildren.delete(child));
+  return child;
 }
 
 async function waitForReady(child, timeoutMs = 10_000) {
@@ -98,10 +127,6 @@ function isAlive(pid) {
   }
 }
 
-function forceKill(pid) {
-  try { process.kill(pid, 'SIGKILL'); } catch {}
-}
-
 // ─── Test 1: Server exits when parent pipe closes ────────────────────────────
 
 async function testParentExitCleanup() {
@@ -123,7 +148,7 @@ async function testParentExitCleanup() {
   }
 
   const alive = isAlive(pid);
-  if (alive) forceKill(pid);
+  if (alive) await killAndReap(child);
   assert.strictEqual(alive, false, `Server PID ${pid} still alive after parent disconnected`);
   console.log('   PASS — Server exited within time budget');
 }
@@ -152,12 +177,12 @@ async function testConcurrentInstancesCoexist() {
   const bAlive = isAlive(pidB);
   console.log(`   Instance A alive: ${aAlive}, Instance B alive: ${bAlive}`);
 
-  // Clean up both
-  try { process.kill(pidA, 'SIGTERM'); } catch {}
-  try { process.kill(pidB, 'SIGTERM'); } catch {}
+  // Clean up both — must await exit to reap zombies
+  try { childA.kill('SIGTERM'); } catch {}
+  try { childB.kill('SIGTERM'); } catch {}
   await sleep(1000);
-  if (isAlive(pidA)) forceKill(pidA);
-  if (isAlive(pidB)) forceKill(pidB);
+  await killAndReap(childA);
+  await killAndReap(childB);
 
   assert.strictEqual(aAlive, true, `Instance A (PID ${pidA}) was killed when Instance B started — regression of #104`);
   assert.strictEqual(bAlive, true, `Instance B (PID ${pidB}) died unexpectedly`);
@@ -187,9 +212,9 @@ async function testNoCpuSpin() {
 
   console.log(`   CPU usage after 5s idle: ${cpuPercent}%`);
 
-  try { process.kill(pid, 'SIGTERM'); } catch {}
+  try { child.kill('SIGTERM'); } catch {}
   await sleep(1000);
-  if (isAlive(pid)) forceKill(pid);
+  await killAndReap(child);
 
   // Orphan spinners hit 80%+. 50% threshold avoids CI false positives.
   assert(cpuPercent < 50, `Server using ${cpuPercent}% CPU while idle — possible spin loop`);
@@ -229,11 +254,11 @@ async function testSiblingInstanceSurvivesParentDeath() {
   const bAlive = isAlive(pidB);
   console.log(`   Instance A alive: ${aAlive}, Instance B alive: ${bAlive}`);
 
-  // Clean up B
-  try { process.kill(pidB, 'SIGTERM'); } catch {}
+  // Clean up — must await exit to reap zombies
+  try { childB.kill('SIGTERM'); } catch {}
   await sleep(1000);
-  if (isAlive(pidA)) forceKill(pidA);
-  if (isAlive(pidB)) forceKill(pidB);
+  await killAndReap(childA);
+  await killAndReap(childB);
 
   assert.strictEqual(aAlive, false, `Instance A (PID ${pidA}) did not exit after parent disconnect`);
   assert.strictEqual(bAlive, true, `Instance B (PID ${pidB}) was killed when A's parent died — must survive`);
@@ -244,19 +269,20 @@ async function testSiblingInstanceSurvivesParentDeath() {
 
 async function testNoOrphansRemain() {
   console.log('\n  Test 5: No orphan processes remain');
-  // Retry loop: CI runners can be slow to reap killed processes
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await sleep(1000);
-    const remaining = countServerProcesses();
-    if (remaining === 0) {
-      console.log('   PASS — No orphan processes');
-      return;
-    }
-    console.log(`   Attempt ${attempt + 1}: ${remaining} process(es) still alive — killing`);
-    killAllServers();
+  // First reap any tracked children (prevents zombies our process owns)
+  await reapAllTracked();
+  await sleep(500);
+  const remaining = countServerProcesses();
+  if (remaining === 0) {
+    console.log('   PASS — No orphan processes');
+    return;
   }
+  // Fallback: kill any stragglers via pkill and wait for reaping
+  console.log(`   WARNING: ${remaining} orphan(s) found — cleaning up`);
+  killAllServers();
+  await sleep(2000);
   const final = countServerProcesses();
-  assert.strictEqual(final, 0, `${final} orphan processes still remain after 5 cleanup attempts`);
+  assert.strictEqual(final, 0, `${final} orphan processes still remain`);
   console.log('   PASS — No orphan processes');
 }
 
@@ -281,6 +307,7 @@ try {
   console.error('\nTest failed:', err.message);
   failed = true;
 } finally {
+  await reapAllTracked();
   killAllServers();
 }
 
