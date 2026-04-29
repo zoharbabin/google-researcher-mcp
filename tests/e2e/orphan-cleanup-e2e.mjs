@@ -37,21 +37,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Track all spawned children so we can reap them properly (avoid zombies)
 const trackedChildren = new Set();
-
-function countServerProcesses() {
-  try {
-    const out = execSync('pgrep -f "google-researcher-mcp/dist/server.js"', {
-      encoding: 'utf8',
-      timeout: 3000,
-    }).trim();
-    return out
-      .split('\n')
-      .map((l) => parseInt(l.trim(), 10))
-      .filter((pid) => !isNaN(pid) && pid !== process.pid).length;
-  } catch {
-    return 0;
-  }
-}
+const allSpawnedPids = new Set();
 
 function killAllServers() {
   try {
@@ -88,7 +74,11 @@ function spawnServer() {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   trackedChildren.add(child);
-  child.on('exit', () => trackedChildren.delete(child));
+  allSpawnedPids.add(child.pid);
+  child.on('exit', () => {
+    trackedChildren.delete(child);
+    allSpawnedPids.delete(child.pid);
+  });
   return child;
 }
 
@@ -269,20 +259,21 @@ async function testSiblingInstanceSurvivesParentDeath() {
 
 async function testNoOrphansRemain() {
   console.log('\n  Test 5: No orphan processes remain');
-  // First reap any tracked children (prevents zombies our process owns)
+  // Reap any tracked children (triggers waitpid, clears zombie state)
   await reapAllTracked();
-  await sleep(500);
-  const remaining = countServerProcesses();
-  if (remaining === 0) {
+  // Check our tracked PIDs — more reliable than pgrep on CI runners
+  const survivors = [...allSpawnedPids].filter((pid) => isAlive(pid));
+  if (survivors.length === 0) {
     console.log('   PASS — No orphan processes');
     return;
   }
-  // Fallback: kill any stragglers via pkill and wait for reaping
-  console.log(`   WARNING: ${remaining} orphan(s) found — cleaning up`);
-  killAllServers();
-  await sleep(2000);
-  const final = countServerProcesses();
-  assert.strictEqual(final, 0, `${final} orphan processes still remain`);
+  console.log(`   WARNING: ${survivors.length} orphan(s) found (PIDs: ${survivors.join(', ')}) — killing`);
+  for (const pid of survivors) {
+    try { process.kill(pid, 'SIGKILL'); } catch {}
+  }
+  await sleep(1000);
+  const stillAlive = survivors.filter((pid) => isAlive(pid));
+  assert.strictEqual(stillAlive.length, 0, `${stillAlive.length} orphan processes still remain (PIDs: ${stillAlive.join(', ')})`);
   console.log('   PASS — No orphan processes');
 }
 
