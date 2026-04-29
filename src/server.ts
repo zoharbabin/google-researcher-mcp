@@ -251,45 +251,6 @@ const PKG_VERSION: string = (() => {
 const DEFAULT_CACHE_PATH = path.resolve(PROJECT_ROOT, 'storage', 'persistent_cache');
 const DEFAULT_EVENT_PATH = path.resolve(PROJECT_ROOT, 'storage', 'event_store');
 const DEFAULT_CRAWLEE_STORAGE_PATH = path.resolve(PROJECT_ROOT, 'storage', 'crawlee');
-const PID_LOCK_PATH = path.resolve(PROJECT_ROOT, 'storage', '.server.pid');
-
-// --- PID Lock (prevents orphan instance accumulation) ---
-async function acquirePidLock(): Promise<void> {
-  try {
-    await fs.mkdir(path.dirname(PID_LOCK_PATH), { recursive: true });
-
-    // Kill ALL other running instances of this server, not just the one in the lock file.
-    // Claude Code may spawn multiple instances simultaneously (e.g., MCP reconnects
-    // while the old process is still alive), so a single-PID lock is insufficient.
-    try {
-      const { execSync } = await import('child_process');
-      const ps = execSync('pgrep -f "google-researcher-mcp/dist/server.js"', { encoding: 'utf8', timeout: 3000 }).trim();
-      for (const line of ps.split('\n')) {
-        const pid = parseInt(line.trim(), 10);
-        if (!isNaN(pid) && pid !== process.pid) {
-          try {
-            process.kill(pid, 'SIGTERM');
-            logger.info(`Sent SIGTERM to stale server process ${pid}`);
-          } catch { /* already dead */ }
-        }
-      }
-    } catch { /* pgrep returns exit 1 if no matches — expected on first launch */ }
-
-    await fs.writeFile(PID_LOCK_PATH, String(process.pid), 'utf8');
-  } catch (error) {
-    logger.warn('Failed to acquire PID lock', { error: String(error) });
-  }
-}
-
-async function releasePidLock(): Promise<void> {
-  try {
-    const content = await fs.readFile(PID_LOCK_PATH, 'utf8').catch(() => '');
-    if (content.trim() === String(process.pid)) {
-      await fs.unlink(PID_LOCK_PATH);
-    }
-  } catch { /* best-effort */ }
-}
-
 // --- Global Instances ---
 // Initialize Cache and Event Store globally so they are available for both transports
 let globalCacheInstance: PersistentCache;
@@ -2754,7 +2715,6 @@ async function gracefulShutdown(signal: string) {
     }
     if (globalCacheInstance?.dispose) await globalCacheInstance.dispose();
     if (eventStoreInstance?.dispose) await eventStoreInstance.dispose();
-    await releasePidLock();
   } catch (error) {
     logger.error('Error during shutdown', { error: String(error) });
   }
@@ -2772,14 +2732,7 @@ process.stdin.on('close', () => gracefulShutdown('stdin-close'));
  * based on execution context (direct run vs. import) and environment variables.
  */
 (async () => {
-  // Run PID lock acquisition concurrently with instance initialization.
-  // The PID lock can take up to ~300ms if killing an orphan, and initializeGlobalInstances
-  // creates storage dirs + cache/event-store objects. Running them in parallel shaves
-  // startup time so the STDIO transport connects before Claude Code's timeout.
-  const pidLockPromise = !process.env.JEST_WORKER_ID
-    ? acquirePidLock()
-    : Promise.resolve();
-  await Promise.all([pidLockPromise, initializeGlobalInstances()]);
+  await initializeGlobalInstances();
 
   // Setup STDIO transport BEFORE the cache finishes loading. This ensures
   // the MCP client can connect and start exchanging messages right away.

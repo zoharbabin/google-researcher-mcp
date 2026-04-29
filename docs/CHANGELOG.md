@@ -5,14 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.3] - 2026-04-29
+
+### Fixed
+- **Concurrent Instance Coexistence**: Removed PID lock and pgrep-based cleanup that killed healthy instances when multiple Claude Code sessions shared the same `npx` install directory ([#104](https://github.com/zoharbabin/google-researcher-mcp/issues/104)). Each instance now only monitors its own parent process — orphan detection is fully self-contained
+
+### Changed
+- **Orphan E2E Tests**: Replaced "new instance kills old" test with multi-user coexistence tests: concurrent instances must survive together, and one parent dying must not affect sibling instances
+
 ## [6.2.2] - 2026-04-28
 
 ### Fixed
 - **Orphan Process CPU Spin**: When Claude Code uses unix domain sockets (not pipes) for stdin/stdout, orphaned server processes would spin at 80-100% CPU indefinitely because Node.js never emits `end`/`close` on broken unix sockets. Added three-layer detection: parent PID reparenting check (`process.ppid`), stdin state flags, and stdout EPIPE probe — checked every 2 seconds
-- **Multi-Instance Cleanup**: Replaced single-PID lock file with `pgrep`-based cleanup that kills ALL stale server instances on startup, not just the one recorded in the lock file
+
+### Removed
+- **PID Lock / pgrep Cleanup**: Removed the PID lock file (`storage/.server.pid`) and pgrep-based process killing introduced in v6.2.0. When multiple Claude Code sessions share the same `npx` install directory, this mechanism killed healthy peers serving other clients ([#104](https://github.com/zoharbabin/google-researcher-mcp/issues/104)). Orphan prevention is now handled entirely by per-process parent-exit detection — each instance only terminates itself when its own parent dies
 
 ### Added
-- **Orphan Prevention E2E Test**: Automated test suite (`npm run test:e2e:orphan`) verifying parent-exit cleanup, multi-instance dedup, no CPU spin, and no leaked processes — runs in CI on every push
+- **Orphan Prevention E2E Test**: Automated test suite (`npm run test:e2e:orphan`) verifying parent-exit cleanup, concurrent instance coexistence, no CPU spin, and no leaked processes — runs in CI on every push
 
 ## [6.2.1] - 2026-04-28
 

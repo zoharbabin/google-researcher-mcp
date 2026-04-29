@@ -351,10 +351,10 @@ The server uses a **single unified shutdown handler** that responds to `SIGINT`,
 4. Exits the process.
 
 ### Orphan Process Prevention
-Multiple layers prevent orphaned processes from accumulating:
-1. **PID lock file** (`storage/.server.pid`): On startup, the server checks for a stale PID lock and sends SIGTERM to any orphaned instance before writing its own PID. The lock is cleaned up on graceful shutdown.
-2. **Stdin EOF detection**: When the parent process (Claude Code, Claude Desktop) terminates, the server detects stdin `end`/`close` events and triggers graceful shutdown.
-3. **Stdin health check**: A periodic check (every 5s) detects destroyed or ended stdin as a safety net for cases where the parent dies without cleanly closing the pipe.
+Multiple layers prevent orphaned processes from accumulating. Importantly, there is **no PID lock file or cross-process killing** — multiple concurrent instances (e.g., separate Claude Code sessions sharing the same `npx` cache) must coexist safely. Each instance is responsible for detecting its own parent's death:
+1. **Stdin EOF detection**: When the parent process (Claude Code, Claude Desktop) terminates, the server detects stdin `end`/`close` events and triggers graceful shutdown.
+2. **Parent PID monitoring**: A periodic check (every 2s) captures `process.ppid` at startup and detects when the OS reparents the process to PID 1 (init/launchd), indicating parent death. This catches cases where unix domain sockets break without emitting stdin `end`/`close` events.
+3. **Stdout EPIPE probe**: Each health check cycle writes an empty string to stdout; if the socket's remote end is gone, the resulting EPIPE error triggers shutdown.
 
 ### Startup Cleanup
 On initialization, the server sweeps the crawlee storage directory for orphaned temp directories (`cheerio_*`, `playwright_*`) left by previous crashes.
