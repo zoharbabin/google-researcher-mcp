@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import { readFileSync, existsSync, fstatSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -2724,6 +2725,35 @@ async function gracefulShutdown(signal: string) {
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
+// --- Orphan Detection Helpers ---
+// When launched via npx the process tree is: MCP client -> npm -> node (us).
+// If the MCP client exits, npm gets reparented to PID 1 but stays alive, so
+// our ppid never changes and Node.js never fires close/end on the broken unix
+// socket (no keepalive on unix domain sockets). These helpers detect the
+// intermediate npm wrapper and check whether it has been orphaned.
+
+/** Returns true if the given PID's command looks like an npm/npx wrapper. */
+function isAncestorNpx(pid: number): boolean {
+  try {
+    const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)],
+      { encoding: 'utf8', timeout: 1000 }).trim();
+    return /\bnpm\b/.test(cmd);
+  } catch {
+    return false;
+  }
+}
+
+/** Returns true if the given PID has been reparented to init/launchd (ppid 0 or 1). */
+function isAncestorOrphaned(pid: number): boolean {
+  try {
+    const ppid = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)],
+      { encoding: 'utf8', timeout: 1000 }).trim();
+    return ppid === '0' || ppid === '1';
+  } catch {
+    return true;
+  }
+}
+
 // --- Main Execution Block ---
 /**
  * Main execution block: Initializes instances and starts transports/server
@@ -2749,15 +2779,25 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     }
 
     // Safety net: detect parent process death (STDIO mode only).
-    // In HTTP mode the server is long-lived and parent exit is normal.
-    // When Claude Code spawns the server, stdin/stdout are unix domain sockets,
-    // not pipes. If the parent dies, these sockets break but Node.js does NOT
-    // emit 'end'/'close' on stdin, and destroyed/readableEnded stay false.
-    // This causes orphaned processes to spin at 100% CPU on a broken socket.
-    // Detection: (1) parent PID becomes 1 (reparented to init/launchd),
-    // (2) stdin.destroyed/readableEnded flags, (3) stdout write fails with EPIPE.
+    // When launched via npx the tree is: MCP client -> npm -> node (us).
+    // If the MCP client exits, npm gets reparented to PID 1 but stays alive,
+    // so our ppid never changes. The unix domain sockets break but Node.js
+    // never fires 'end'/'close' or sets destroyed/readableEnded (no keepalive
+    // on unix domain sockets). This causes 100% CPU spin on the broken socket.
+    //
+    // Detection (cheapest first):
+    //   1. Direct ppid change       — free, covers non-npx case
+    //   2. stdin.destroyed flags     — free, rarely works for unix sockets
+    //   3. Ancestor reparent check   — ~3ms ps(1) call, covers npx case
+    //
+    // Pure-Node alternatives were tested and ruled out:
+    //   - writeSync(fd, Buffer.alloc(0)): zero-count write returns 0 per POSIX
+    //   - stream.write(''): Node skips the write(2) syscall entirely
+    //   - net.Socket({fd}): conflicts with MCP transport ownership of stdin
+    //   - Unix domain sockets have no keepalive (unlike TCP SO_KEEPALIVE)
     if (stdinIsClientPipe || process.env.MCP_TEST_MODE === 'stdio') {
       const originalParentPid = process.ppid;
+      const npxDetected = isAncestorNpx(process.ppid);
       const stdinHealthCheck = setInterval(() => {
         const reparented = process.ppid !== originalParentPid;
         const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
@@ -2766,13 +2806,10 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
           gracefulShutdown(reparented ? 'parent-exit' : 'stdin-health-check');
           return;
         }
-        if (!process.stdout.destroyed) {
-          process.stdout.write('', (err) => {
-            if (err) {
-              clearInterval(stdinHealthCheck);
-              gracefulShutdown('stdout-broken');
-            }
-          });
+        if (npxDetected && isAncestorOrphaned(process.ppid)) {
+          clearInterval(stdinHealthCheck);
+          gracefulShutdown('ancestor-orphaned');
+          return;
         }
       }, 2000);
       stdinHealthCheck.unref();
