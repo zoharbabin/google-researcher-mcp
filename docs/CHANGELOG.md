@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.1] - 2026-05-07
+
+### Fixed
+- **Platform Compatibility**: Environment validation no longer kills the process on invalid API key format. Server starts and responds to MCP protocol messages (initialize, ping) regardless of credential validity — tools fail gracefully at call time instead. Fixes Glama.ai build failures where placeholder credentials caused immediate exit
+
 ## [6.3.0] - 2026-05-07
 
 ### Added

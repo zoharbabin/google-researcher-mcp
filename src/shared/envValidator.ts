@@ -312,27 +312,27 @@ export function validateEnvironmentOrExit(
   const result = validateEnvironment({ ...options, logWarnings: true });
 
   if (!result.valid) {
-    logger.error('Environment validation failed. Please fix the following issues:');
+    // Log errors as warnings — the server should still start so it can respond
+    // to MCP protocol messages (initialize, ping). Tools will fail gracefully
+    // at call time if credentials are missing or invalid.
+    logger.warn('Environment validation issues detected:');
 
     for (const error of result.errors) {
       const formatted = formatValidationError(error);
-      // Log each line separately for better visibility
       for (const line of formatted.split('\n')) {
-        logger.error(line);
+        logger.warn(line);
       }
     }
 
-    logger.error('See .env.example for configuration documentation.');
+    logger.warn('Tools requiring these credentials will return errors at call time. See .env.example for configuration documentation.');
 
-    // In test environment, throw an error instead of exiting so tests can catch it
+    // In test environment, throw so tests can assert on validation
     if (process.env.NODE_ENV === 'test') {
       throw new EnvironmentValidationError(
         'Environment validation failed',
         result.errors
       );
     }
-
-    process.exit(1);
   }
 }
 
