@@ -316,7 +316,7 @@ Searches Google News with freshness and date sorting.
 | `news_source` | string | - | Filter to specific source |
 
 #### `scrape_page`
-Extracts text from any URL. Auto-detects: web pages (static/JS), YouTube (transcript), documents (PDF/DOCX/PPTX).
+Extracts text from any URL. Prefers markdown via content negotiation (`Accept: text/markdown`) for sites that support it (Cloudflare Markdown for Agents, llms.txt). Falls back to HTML extraction (static/JS), YouTube (transcript), documents (PDF/DOCX/PPTX).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

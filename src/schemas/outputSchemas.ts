@@ -142,7 +142,7 @@ export const scrapePageOutputSchema = {
   /** Extracted text content (empty in preview mode) */
   content: z.string().describe('The extracted text content from the page'),
   /** Type of content extracted */
-  contentType: z.enum(['html', 'youtube', 'pdf', 'docx', 'pptx']).describe('The type of content that was extracted'),
+  contentType: z.enum(['html', 'markdown', 'youtube', 'pdf', 'docx', 'pptx']).describe('The type of content that was extracted'),
   /** Content length in characters */
   contentLength: z.number().int().min(0).describe('Length of the extracted content in characters'),
   /** Whether content was truncated */
@@ -168,7 +168,7 @@ export const scrapePageOutputSchema = {
 export type ScrapePageOutput = {
   url: string;
   content: string;
-  contentType: 'html' | 'youtube' | 'pdf' | 'docx' | 'pptx';
+  contentType: 'html' | 'markdown' | 'youtube' | 'pdf' | 'docx' | 'pptx';
   contentLength: number;
   truncated: boolean;
   estimatedTokens: number;

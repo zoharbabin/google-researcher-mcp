@@ -1,7 +1,7 @@
 {
   "name": "google-researcher-mcp",
   "mcpName": "io.github.zoharbabin/google-researcher",
-  "version": "6.2.3",
+  "version": "6.3.0",
   "description": "An MCP server providing Google Search, web scraping, and multi-source research tools for AI assistants.",
   "author": {
     "name": "Zohar Babin",
@@ -70,6 +70,7 @@
     "test:e2e:youtube": "node tests/e2e/youtube-transcript-e2e.mjs",
     "test:e2e:orphan": "node --no-deprecation tests/e2e/orphan-cleanup-e2e.mjs",
     "test:e2e:timeout": "npm run build && node --no-deprecation tests/e2e/comprehensive_timeout_test.js",
+    "test:e2e:markdown": "node --no-warnings tests/e2e/markdown-negotiation-e2e.mjs",
     "test:integration": "npm test -- --testPathPattern=server-integration",
     "test:unit": "npm test -- --testPathPattern=spec --testPathIgnorePatterns=server-integration",
     "test": "node --experimental-vm-modules --no-deprecation node_modules/jest/bin/jest.js",
@@ -92,14 +93,14 @@
     "cors": "^2.8.5",
     "crawlee": "^3.13.2",
     "express": "^5.1.0",
-    "express-rate-limit": "^8.2.1",
+    "express-rate-limit": "^8.3.1",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.1",
     "jwks-rsa": "^3.2.0",
     "mammoth": "^1.11.0",
     "node-fetch": "^3.3.2",
     "pdf-parse": "^2.4.5",
-    "playwright": "^1.52.0",
+    "playwright": "^1.58.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {

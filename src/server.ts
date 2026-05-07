@@ -33,7 +33,7 @@ import { PersistentCache, HybridPersistenceStrategy } from "./cache/index.js";
 import { serveOAuthScopesDocumentation } from "./shared/oauthScopesDocumentation.js";
 import { createOAuthMiddleware, OAuthMiddlewareOptions } from "./shared/oauthMiddleware.js";
 import { RobustYouTubeTranscriptExtractor, YouTubeTranscriptError, YouTubeTranscriptErrorType } from "./youtube/transcriptExtractor.js";
-import { validateUrlForSSRF, SSRFProtectionError, getSSRFOptionsFromEnv } from "./shared/urlValidator.js";
+import { validateUrlForSSRF, ssrfSafeFetch, SSRFProtectionError, getSSRFOptionsFromEnv } from "./shared/urlValidator.js";
 import { logger } from "./shared/logger.js";
 import { deduplicateContent } from "./shared/contentDeduplication.js";
 import { parseDocument, isDocumentUrl, detectDocumentType, DocumentType } from "./documents/index.js";
@@ -618,6 +618,7 @@ function configureToolsAndResources(
         content: string;
         rawHtml?: string;
         citation?: Citation;
+        isMarkdown?: boolean;
     }
 
     /**
@@ -673,6 +674,49 @@ function configureToolsAndResources(
         }
 
         return true;
+    }
+
+    /**
+     * Attempt to fetch a URL with Accept: text/markdown content negotiation.
+     * Sites using Cloudflare "Markdown for Agents" or similar will serve structured
+     * markdown directly, which is far superior for LLM consumption.
+     * Returns null if the site doesn't support markdown negotiation.
+     */
+    async function tryMarkdownNegotiation(url: string): Promise<ScrapeResult | null> {
+        try {
+            const response = await ssrfSafeFetch(url, SSRF_OPTIONS, {
+                headers: {
+                    'Accept': 'text/markdown, text/x-markdown',
+                    'User-Agent': 'ModelContextProtocol/1.0 (MCP Scraper; +https://github.com/zoharbabin/google-researcher-mcp)',
+                },
+                signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+            });
+
+            if (!response.ok) return null;
+
+            const contentType = response.headers.get('content-type') || '';
+            const declaredMarkdown = contentType.includes('text/markdown') || contentType.includes('text/x-markdown');
+
+            // If server explicitly says it's not text, bail
+            if (!declaredMarkdown && !contentType.includes('text/plain')) return null;
+
+            const body = await response.text();
+            if (!body || body.trim().length < MIN_CHEERIO_CONTENT_LENGTH) return null;
+
+            // For text/plain: heuristic check for markdown content (llms.txt-style sites)
+            if (!declaredMarkdown) {
+                const trimmed = body.trimStart();
+                const looksLikeMarkdown = trimmed.startsWith('# ') ||
+                    trimmed.startsWith('---\n') ||
+                    trimmed.startsWith('> ') ||
+                    /^#{1,3}\s/m.test(trimmed.substring(0, 500));
+                if (!looksLikeMarkdown) return null;
+            }
+
+            return { content: body.trim(), rawHtml: '', isMarkdown: true };
+        } catch {
+            return null;
+        }
     }
 
     /**
@@ -957,6 +1001,7 @@ function configureToolsAndResources(
     interface ScrapePageResult {
         content: Array<{ type: "text"; text: string }>;
         citation?: Citation;
+        isMarkdown?: boolean;
     }
 
     const scrapePageFn = async ({ url, traceId }: { url: string; traceId?: string }): Promise<ScrapePageResult> => {
@@ -979,6 +1024,7 @@ function configureToolsAndResources(
                 logger.debug('Cache MISS for scrapePage', { traceId, url: sanitizeUrl(url) });
                 let text = "";
                 let citation: Citation | undefined;
+                let isMarkdown = false;
 
                 const yt = url.match(
                     /(?:youtu\.be\/|youtube\.com\/watch\?v=)([A-Za-z0-9_-]{11})(?:[&#?]|$)/
@@ -1027,11 +1073,17 @@ function configureToolsAndResources(
                     }
                     // Documents don't have HTML-based citation metadata
                 } else {
-                    // Circuit breaker + tiered scraping strategy:
+                    // Tiered scraping strategy:
+                    // 0. Try Accept: text/markdown content negotiation (Cloudflare Markdown for Agents, etc.)
                     // 1. Known SPA domains → go directly to Playwright
                     // 2. Other sites → try Cheerio first, fallback to Playwright if content is not meaningful
-                    const scrapeResult = await webScrapingCircuit.execute(async () => {
-                        // For known SPA domains, skip Cheerio entirely
+                    const markdownResult = await tryMarkdownNegotiation(url);
+                    if (markdownResult) {
+                        logger.info('Markdown content negotiation succeeded', {
+                            traceId, url: sanitizeUrl(url), contentLength: markdownResult.content.length
+                        });
+                    }
+                    const scrapeResult = markdownResult ?? await webScrapingCircuit.execute(async () => {
                         if (isKnownSpaDomain(url)) {
                             logger.info('Known SPA domain detected, using Playwright directly', {
                                 traceId, url: sanitizeUrl(url)
@@ -1039,10 +1091,8 @@ function configureToolsAndResources(
                             return await scrapeWithPlaywright(url);
                         }
 
-                        // Try fast Cheerio scrape first
                         let result = await scrapeWithCheerio(url);
 
-                        // Check if content is meaningful (not just a JS shell)
                         if (!isMeaningfulContent(result.content, result.rawHtml)) {
                             logger.info('Cheerio returned non-meaningful content (likely SPA), falling back to Playwright', {
                                 traceId, url: sanitizeUrl(url), cheerioLength: result.content.length
@@ -1054,6 +1104,7 @@ function configureToolsAndResources(
 
                     text = scrapeResult.content;
                     citation = scrapeResult.citation;
+                    isMarkdown = scrapeResult.isMarkdown ?? false;
                 }
 
                 // Limit content size to prevent memory issues
@@ -1068,6 +1119,7 @@ function configureToolsAndResources(
                 return {
                     content: [{ type: "text" as const, text }],
                     citation,
+                    isMarkdown,
                 };
             },
             {
@@ -1206,8 +1258,8 @@ function configureToolsAndResources(
             let textContent = result.content[0]?.text ?? '';
             const originalLength = textContent.length;
 
-            // Detect content type from URL
-            let contentType: ScrapePageOutput['contentType'] = 'html';
+            // Detect content type from URL or negotiation result
+            let contentType: ScrapePageOutput['contentType'] = result.isMarkdown ? 'markdown' : 'html';
             const ytMatch = url.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([A-Za-z0-9_-]{11})(?:[&#?]|$)/);
             if (ytMatch) {
                 contentType = 'youtube';

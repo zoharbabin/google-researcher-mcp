@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.0] - 2026-05-07
+
+### Added
+- **Markdown Content Negotiation**: `scrape_page` now sends `Accept: text/markdown` before falling back to HTML extraction. Sites supporting [Cloudflare Markdown for Agents](https://developers.cloudflare.com/fundamentals/reference/markdown-for-agents/), llms.txt, or standard content negotiation return clean structured markdown — preserving headings, code blocks, links, and formatting that HTML-to-text extraction loses. Response `contentType` is `"markdown"` when negotiation succeeds
+- **E2E Test**: `npm run test:e2e:markdown` validates content negotiation against live sites (kaltura.md, Cloudflare docs, Anthropic docs)
+
+### Fixed
+- **Security**: Bumped `express-rate-limit` minimum to `^8.3.1` (CVE-2026-30827 IPv4-mapped IPv6 bypass) and `playwright` to `^1.58.2` (CVE-2025-59288 macOS SSL cert verification bypass)
+
 ## [6.2.3] - 2026-04-29
 
 ### Fixed

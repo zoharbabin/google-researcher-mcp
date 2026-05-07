@@ -43,6 +43,7 @@ Use `prompts/get` to retrieve these research workflow templates:
 
 ## Key Behaviors
 
+- **Markdown First**: `scrape_page` requests `Accept: text/markdown` — sites supporting Cloudflare Markdown for Agents or llms.txt serve clean markdown (preserves code, headings, links)
 - **Caching**: Results cached (30 min search, 1 hour scrape) - repeated queries are fast
 - **SPA Support**: Automatically uses browser rendering for JavaScript sites (Google Patents, etc.)
 - **Graceful Failures**: Partial results returned if some sources fail

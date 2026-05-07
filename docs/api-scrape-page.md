@@ -9,11 +9,27 @@ Use `scrape_page` when you have a **specific URL** and need its content. For res
 ## Tool Overview
 
 The `scrape_page` tool extracts text content from:
-- **Web pages** — Static HTML (fast) or JavaScript-rendered SPAs (automatic Playwright fallback)
+- **Web pages** — Markdown content negotiation (best quality), static HTML (fast), or JavaScript-rendered SPAs (automatic Playwright fallback)
 - **YouTube videos** — Extracts transcript with robust error handling and retry logic
 - **Documents** — PDF, DOCX, PPTX files (extracts text and metadata)
 
 Results are cached for 1 hour.
+
+### Markdown Content Negotiation
+
+Before falling back to HTML extraction, `scrape_page` attempts content negotiation by sending `Accept: text/markdown` in the HTTP request. Sites that support this protocol return clean, structured markdown directly — far superior for LLM consumption.
+
+**Supported protocols:**
+- [Cloudflare Markdown for Agents](https://developers.cloudflare.com/fundamentals/reference/markdown-for-agents/) — any Cloudflare-fronted site with the feature enabled
+- Sites serving `text/markdown` Content-Type in response to Accept header negotiation
+- llms.txt-style sites that serve markdown as `text/plain` (detected via heuristic)
+
+When markdown negotiation succeeds, `contentType` in the response will be `"markdown"` instead of `"html"`. This content preserves headings, code blocks, links, and formatting — no information is lost to HTML-to-text extraction.
+
+**Scraping strategy (in order):**
+1. `Accept: text/markdown` content negotiation (zero overhead for non-supporting sites)
+2. Known SPA domains → Playwright directly
+3. Cheerio (static HTML extraction) → Playwright fallback if content is not meaningful
 
 ### Input Schema
 
@@ -110,7 +126,7 @@ All responses include a `structuredContent` field with typed data:
 | :--- | :--- | :--- |
 | `url` | string | The URL that was scraped |
 | `content` | string | Extracted text content |
-| `contentType` | enum | `html`, `youtube`, `pdf`, `docx`, or `pptx` |
+| `contentType` | enum | `html`, `markdown`, `youtube`, `pdf`, `docx`, or `pptx` |
 | `contentLength` | number | Length of content in characters |
 | `truncated` | boolean | Whether content was truncated due to size limits |
 | `metadata` | object | Optional document metadata (title, pageCount) |
