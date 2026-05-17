@@ -338,15 +338,19 @@ async function initializeGlobalInstances(
     eagerLoading: false,
   };
 
-  // Encryption key format is validated by envValidator; getValidatedEnvValue throws if invalid
-  const encryptionKey = getValidatedEnvValue('EVENT_STORE_ENCRYPTION_KEY');
-  if (encryptionKey) {
-    const keyBuffer = Buffer.from(encryptionKey, 'hex');
-    eventStoreOpts.encryption = {
-      enabled: true,
-      keyProvider: async () => keyBuffer,
-    };
-    logger.info('Event store encryption enabled.');
+  // Enable encryption if a valid key is provided (skip silently on invalid format)
+  try {
+    const encryptionKey = getValidatedEnvValue('EVENT_STORE_ENCRYPTION_KEY');
+    if (encryptionKey) {
+      const keyBuffer = Buffer.from(encryptionKey, 'hex');
+      eventStoreOpts.encryption = {
+        enabled: true,
+        keyProvider: async () => keyBuffer,
+      };
+      logger.info('Event store encryption enabled.');
+    }
+  } catch (e) {
+    logger.warn('EVENT_STORE_ENCRYPTION_KEY has invalid format, encryption disabled.', { error: String(e) });
   }
 
   eventStoreInstance = new PersistentEventStore(eventStoreOpts);
@@ -689,7 +693,7 @@ function configureToolsAndResources(
                     'Accept': 'text/markdown, text/x-markdown',
                     'User-Agent': 'ModelContextProtocol/1.0 (MCP Scraper; +https://github.com/zoharbabin/google-researcher-mcp)',
                 },
-                signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+                signal: AbortSignal.timeout(5000),
             });
 
             if (!response.ok) return null;
@@ -2807,20 +2811,21 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     // This causes orphaned processes to spin at 100% CPU on a broken socket.
     //
     // NOTE: process.ppid is a static property in Node.js — it does NOT update
-    // when the process is reparented to init/launchd. We must use kill(pid, 0)
+    // when the process is reparented to init/launchd. We use kill(pid, 0)
     // to actively probe whether the original parent is still alive.
+    // ESRCH (no such process) = parent dead. EPERM = alive but different user.
     if (stdinIsClientPipe || process.env.MCP_TEST_MODE === 'stdio') {
       const originalParentPid = process.ppid;
       const stdinHealthCheck = setInterval(() => {
-        // Check 1: Is original parent still alive? (ESRCH = dead, EPERM = alive but different user)
         let parentAlive = true;
         try {
           process.kill(originalParentPid, 0);
-        } catch {
-          parentAlive = false;
+        } catch (e: unknown) {
+          // ESRCH = process does not exist (parent is dead)
+          // EPERM = process exists but we can't signal it (alive, different user)
+          parentAlive = (e as NodeJS.ErrnoException).code === 'EPERM';
         }
 
-        // Check 2: stdin stream flags
         const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
 
         if (!parentAlive || stdinBroken) {

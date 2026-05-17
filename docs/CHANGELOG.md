@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.3] - 2026-05-17
+
+### Fixed
+- **Orphan Detection EPERM Handling**: Correctly distinguish between ESRCH (process dead) and EPERM (process alive but different user). Prevents false shutdown when parent is owned by root (e.g., system services, launchd)
+- **Startup Resilience**: `EVENT_STORE_ENCRYPTION_KEY` format errors no longer crash startup — encryption is disabled with a warning instead
+- **Markdown Negotiation Timeout**: Reduced from 15s to 5s since it's a lightweight probe that should not delay normal scraping
+
 ## [6.3.2] - 2026-05-08
 
 ### Fixed
