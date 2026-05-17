@@ -2801,30 +2801,31 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     }
 
     // Safety net: detect parent process death (STDIO mode only).
-    // In HTTP mode the server is long-lived and parent exit is normal.
-    // When Claude Code spawns the server, stdin/stdout are unix domain sockets,
-    // not pipes. If the parent dies, these sockets break but Node.js does NOT
-    // emit 'end'/'close' on stdin, and destroyed/readableEnded stay false.
+    // When Claude Code spawns the server, stdin/stdout are unix domain sockets.
+    // If the parent dies, these sockets break but Node.js does NOT emit
+    // 'end'/'close' on stdin, and destroyed/readableEnded stay false.
     // This causes orphaned processes to spin at 100% CPU on a broken socket.
-    // Detection: (1) parent PID becomes 1 (reparented to init/launchd),
-    // (2) stdin.destroyed/readableEnded flags, (3) stdout write fails with EPIPE.
+    //
+    // NOTE: process.ppid is a static property in Node.js — it does NOT update
+    // when the process is reparented to init/launchd. We must use kill(pid, 0)
+    // to actively probe whether the original parent is still alive.
     if (stdinIsClientPipe || process.env.MCP_TEST_MODE === 'stdio') {
       const originalParentPid = process.ppid;
       const stdinHealthCheck = setInterval(() => {
-        const reparented = process.ppid !== originalParentPid;
-        const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
-        if (reparented || stdinBroken) {
-          clearInterval(stdinHealthCheck);
-          gracefulShutdown(reparented ? 'parent-exit' : 'stdin-health-check');
-          return;
+        // Check 1: Is original parent still alive? (ESRCH = dead, EPERM = alive but different user)
+        let parentAlive = true;
+        try {
+          process.kill(originalParentPid, 0);
+        } catch {
+          parentAlive = false;
         }
-        if (!process.stdout.destroyed) {
-          process.stdout.write('', (err) => {
-            if (err) {
-              clearInterval(stdinHealthCheck);
-              gracefulShutdown('stdout-broken');
-            }
-          });
+
+        // Check 2: stdin stream flags
+        const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
+
+        if (!parentAlive || stdinBroken) {
+          clearInterval(stdinHealthCheck);
+          gracefulShutdown(!parentAlive ? 'parent-exit' : 'stdin-health-check');
         }
       }, 2000);
       stdinHealthCheck.unref();

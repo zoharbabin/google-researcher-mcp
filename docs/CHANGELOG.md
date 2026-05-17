@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.2] - 2026-05-08
+
+### Fixed
+- **Orphan Process CPU Spin (Node.js 24)**: `process.ppid` is a static property in Node.js — it does NOT update when the process is reparented to init/launchd after parent death. The orphan detection relied on `process.ppid !== originalParentPid` which could never trigger. Replaced with `process.kill(originalParentPid, 0)` which actively probes whether the parent is still alive (throws ESRCH when dead). Also removed the useless `stdout.write('')` probe — empty string writes are optimized away by Node.js streams and never detect broken sockets
+
 ## [6.3.1] - 2026-05-07
 
 ### Fixed
