@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.4.0] - 2026-05-17
+
+### Fixed
+- **Orphan Process CPU Spin — Root Cause Fix**: The `setInterval`-based orphan detection (v6.3.2/v6.3.3) cannot work when the event loop is saturated. When a unix domain socket breaks (parent dies), libuv enters a tight C++ read loop that starves the JavaScript event loop — `setInterval` callbacks never fire. Replaced with a **worker thread watchdog** (`worker_threads`) that runs its own independent event loop, immune to main thread starvation. The watchdog monitors the parent PID and force-exits the process within seconds of parent death
+
+### Added
+- **E2E Test**: `npm run test:e2e:watchdog` validates the worker thread watchdog by spawning an intermediary parent, killing it, and verifying the server self-terminates
+
 ## [6.3.3] - 2026-05-17
 
 ### Fixed

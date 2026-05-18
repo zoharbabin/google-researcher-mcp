@@ -62,6 +62,7 @@ import { CircuitBreaker, CircuitOpenError } from "./shared/circuitBreaker.js";
 import { mapWithConcurrency } from "./shared/concurrency.js";
 import type rateLimit from "express-rate-limit";
 import { validateEnvironmentOrExit, getValidatedEnvValue } from "./shared/envValidator.js";
+import { startParentWatchdog, stopParentWatchdog } from "./shared/parentWatchdog.js";
 import { scoreSource, scoreAndRankSources, type QualityScores } from "./shared/qualityScoring.js";
 import {
   annotateImageResults,
@@ -2761,6 +2762,8 @@ async function gracefulShutdown(signal: string) {
   forceExitTimer.unref();
 
   try {
+    // Stop the watchdog first so it doesn't kill us mid-cleanup
+    await stopParentWatchdog();
     if (stdioTransportInstance?.close) await stdioTransportInstance.close();
     if (httpTransportInstance?.close) await httpTransportInstance.close();
     if (httpServerInstance) {
@@ -2807,33 +2810,18 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     // Safety net: detect parent process death (STDIO mode only).
     // When Claude Code spawns the server, stdin/stdout are unix domain sockets.
     // If the parent dies, these sockets break but Node.js does NOT emit
-    // 'end'/'close' on stdin, and destroyed/readableEnded stay false.
-    // This causes orphaned processes to spin at 100% CPU on a broken socket.
+    // 'end'/'close' on stdin. Worse, libuv enters a tight CPU spin loop at the
+    // C++ level trying to read the broken socket, starving the JS event loop.
+    // This means setInterval-based checks CANNOT fire — they depend on the
+    // event loop that's saturated.
     //
-    // NOTE: process.ppid is a static property in Node.js — it does NOT update
-    // when the process is reparented to init/launchd. We use kill(pid, 0)
-    // to actively probe whether the original parent is still alive.
-    // ESRCH (no such process) = parent dead. EPERM = alive but different user.
+    // Solution: a worker thread with its own independent event loop monitors
+    // the parent PID. Worker threads are immune to main thread starvation
+    // and will force-exit the process when the parent dies.
     if (stdinIsClientPipe || process.env.MCP_TEST_MODE === 'stdio') {
-      const originalParentPid = process.ppid;
-      const stdinHealthCheck = setInterval(() => {
-        let parentAlive = true;
-        try {
-          process.kill(originalParentPid, 0);
-        } catch (e: unknown) {
-          // ESRCH = process does not exist (parent is dead)
-          // EPERM = process exists but we can't signal it (alive, different user)
-          parentAlive = (e as NodeJS.ErrnoException).code === 'EPERM';
-        }
-
-        const stdinBroken = process.stdin.destroyed || process.stdin.readableEnded;
-
-        if (!parentAlive || stdinBroken) {
-          clearInterval(stdinHealthCheck);
-          gracefulShutdown(!parentAlive ? 'parent-exit' : 'stdin-health-check');
-        }
-      }, 2000);
-      stdinHealthCheck.unref();
+      startParentWatchdog(process.ppid, () => {
+        gracefulShutdown('parent-exit');
+      });
     }
   }
 

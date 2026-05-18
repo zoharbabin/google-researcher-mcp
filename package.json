@@ -1,7 +1,7 @@
 {
   "name": "google-researcher-mcp",
   "mcpName": "io.github.zoharbabin/google-researcher",
-  "version": "6.3.3",
+  "version": "6.4.0",
   "description": "An MCP server providing Google Search, web scraping, and multi-source research tools for AI assistants.",
   "author": {
     "name": "Zohar Babin",
@@ -69,6 +69,7 @@
     "test:e2e:sse": "./scripts/run-sse-test.sh",
     "test:e2e:youtube": "node tests/e2e/youtube-transcript-e2e.mjs",
     "test:e2e:orphan": "node --no-deprecation tests/e2e/orphan-cleanup-e2e.mjs",
+    "test:e2e:watchdog": "node --no-deprecation tests/e2e/watchdog-e2e.mjs",
     "test:e2e:timeout": "npm run build && node --no-deprecation tests/e2e/comprehensive_timeout_test.js",
     "test:e2e:markdown": "node --no-warnings tests/e2e/markdown-negotiation-e2e.mjs",
     "test:integration": "npm test -- --testPathPattern=server-integration",
