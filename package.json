@@ -1,56 +1,33 @@
 {
   "name": "google-researcher-mcp",
-  "mcpName": "io.github.zoharbabin/google-researcher",
-  "version": "6.4.0",
-  "description": "An MCP server providing Google Search, web scraping, and multi-source research tools for AI assistants.",
+  "version": "7.0.0",
+  "deprecated": "This package is deprecated. Use web-researcher-mcp instead: https://github.com/zoharbabin/web-researcher-mcp",
+  "description": "DEPRECATED — Use web-researcher-mcp instead. See https://github.com/zoharbabin/web-researcher-mcp",
   "author": {
     "name": "Zohar Babin",
     "url": "https://github.com/zoharbabin"
   },
   "license": "MIT",
-  "homepage": "https://github.com/zoharbabin/google-researcher-mcp#readme",
+  "homepage": "https://github.com/zoharbabin/web-researcher-mcp",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zoharbabin/google-researcher-mcp.git"
-  },
-  "bugs": {
-    "url": "https://github.com/zoharbabin/google-researcher-mcp/issues"
   },
   "keywords": [
     "mcp",
     "mcp-server",
     "model-context-protocol",
-    "claude",
-    "claude-desktop",
-    "claude-code",
-    "cursor",
-    "windsurf",
-    "anthropic",
-    "ai-tools",
-    "ai-agent",
-    "google-search",
-    "web-scraping",
-    "research",
-    "academic-search",
-    "patent-search",
-    "youtube-transcripts",
-    "pdf-extraction",
-    "llm-tools",
-    "ai-assistant"
+    "deprecated"
   ],
   "type": "module",
   "main": "dist/server.js",
-  "types": "dist/server.d.ts",
   "bin": {
     "google-researcher-mcp": "dist/server.js"
   },
   "files": [
     "dist/**/*",
     "README.md",
-    "LICENSE",
-    "llms.txt",
-    "llms-full.txt",
-    "docs/**/*.md"
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public",
@@ -61,60 +38,14 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "prepare": "npm run build",
-    "postinstall": "npx playwright install chromium 2>/dev/null || echo 'Note: Playwright browser install skipped (run npx playwright install chromium manually if scraping JS-rendered pages)'",
-    "prepublishOnly": "npm run build && npm test",
-    "test:e2e": "npm run build && npm run test:e2e:stdio && npm run test:e2e:sse && npm run test:e2e:youtube",
-    "test:e2e:stdio": "node tests/e2e/e2e_stdio_mcp_client_test.mjs",
-    "test:e2e:sse": "./scripts/run-sse-test.sh",
-    "test:e2e:youtube": "node tests/e2e/youtube-transcript-e2e.mjs",
-    "test:e2e:orphan": "node --no-deprecation tests/e2e/orphan-cleanup-e2e.mjs",
-    "test:e2e:watchdog": "node --no-deprecation tests/e2e/watchdog-e2e.mjs",
-    "test:e2e:timeout": "npm run build && node --no-deprecation tests/e2e/comprehensive_timeout_test.js",
-    "test:e2e:markdown": "node --no-warnings tests/e2e/markdown-negotiation-e2e.mjs",
-    "test:integration": "npm test -- --testPathPattern=server-integration",
-    "test:unit": "npm test -- --testPathPattern=spec --testPathIgnorePatterns=server-integration",
-    "test": "node --experimental-vm-modules --no-deprecation node_modules/jest/bin/jest.js",
-    "test:coverage": "node --experimental-vm-modules --no-deprecation node_modules/jest/bin/jest.js --coverage",
-    "test:verbose": "node --experimental-vm-modules --no-deprecation node_modules/jest/bin/jest.js --verbose",
-    "test:fix": "node --experimental-vm-modules --no-deprecation node_modules/jest/bin/jest.js --no-cache",
-    "test:warnings": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:benchmark": "node --experimental-vm-modules --no-deprecation node_modules/jest/bin/jest.js --testPathPattern=benchmark --verbose",
     "build": "tsc",
     "postbuild": "node -e \"const f='dist/server.js';const c=require('fs').readFileSync(f,'utf8');if(!c.startsWith('#!'))require('fs').writeFileSync(f,'#!/usr/bin/env node\\n'+c)\"",
-    "start": "node dist/server.js",
-    "dev": "tsx watch src/server.ts",
-    "inspect": "npx @modelcontextprotocol/inspector node dist/server.js",
-    "test:e2e:inspector": "node tests/e2e/mcp-inspector-e2e.mjs"
-  },
-  "dependencies": {
-    "@danielxceron/youtube-transcript": "^1.2.6",
-    "@modelcontextprotocol/sdk": "^1.26.0",
-    "cheerio": "1.0.0-rc.12",
-    "cors": "^2.8.5",
-    "crawlee": "^3.13.2",
-    "express": "^5.1.0",
-    "express-rate-limit": "^8.3.1",
-    "jsonwebtoken": "^9.0.2",
-    "jszip": "^3.10.1",
-    "jwks-rsa": "^3.2.0",
-    "mammoth": "^1.11.0",
-    "node-fetch": "^3.3.2",
-    "pdf-parse": "^2.4.5",
-    "playwright": "^1.58.2",
-    "zod": "^3.25.0"
+    "test": "echo 'No tests — deprecation release'",
+    "test:unit": "echo 'No tests — deprecation release'",
+    "start": "node dist/server.js"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.17",
-    "@types/express": "^5.0.1",
-    "@types/jest": "^29.5.14",
-    "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.14.1",
-    "@types/supertest": "^6.0.3",
-    "jest": "^29.7.0",
-    "supertest": "^7.1.0",
-    "ts-jest": "^29.3.2",
-    "tsx": "^4.19.2",
     "typescript": "^5.8.0"
   }
 }

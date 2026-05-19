@@ -1,43 +1,13 @@
 {
   "compilerOptions": {
-    // 1. Emit JS for a modern Node version
     "target": "ES2022",
-    "useDefineForClassFields": true,
-    // 2. Use ESM modules for Node
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-
-    // 3. Include built‑ins for ES2022 (Promise, Set, Map, Symbol, async/await)
-    "lib": ["ES2022", "DOM"],
-    
-    // 4. Enable iteration through iterators
-    "downlevelIteration": true,
-
-    // 4. Enable default interoperability between CommonJS and ES Modules
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-
-    // 5. Don't choke on library .d.ts mismatches
     "skipLibCheck": true,
-    "skipDefaultLibCheck": true,
-
-    // 6. Put all output under dist/
     "outDir": "dist",
-
-    // 7. Generate declaration files for npm publishing
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-
-    // 8. Tell TS to load Node.js types (Buffer, global process, etc.)
-    "types": ["node", "jest"],
-    
-    // 9. Required for Node16/18/Next module kind
-    "isolatedModules": true
+    "types": ["node"]
   },
-
-  // Make sure tsconfig is actually used when you run `tsc`
-  "include": ["src/**/*.ts"],
-  // Exclude test files from compilation (vitest handles them separately)
-  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts", "node_modules"]
+  "include": ["src/server.ts"]
 }
